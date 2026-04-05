@@ -4,4 +4,7 @@ use (
 	./hello
 	./utils
 	./auth
+	./middleware
+	./protocol
+	./postgres
 )
