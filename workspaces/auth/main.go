@@ -43,7 +43,7 @@ type Claims struct {
 	jwt.RegisteredClaims
 }
 
-// Khởi tạo new JWT Validator
+// Khởi tạo new JWT Validator (constructor)
 func NewJWTValidator(cfg Config) (*JWTValidator, error) {
 	// 1. Parse RSA Public key from PEM
 	publicKey, err := jwt.ParseRSAPublicKeyFromPEM([]byte(cfg.PublicKeyPEM))
