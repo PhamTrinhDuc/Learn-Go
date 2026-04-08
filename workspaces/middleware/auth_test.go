@@ -5,8 +5,10 @@ import (
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/x509"
+	"encoding/json"
 	"encoding/pem"
-	"middleware"
+	"net/http"
+	"net/http/httptest"
 	protocol "protocal"
 	"testing"
 
@@ -14,7 +16,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func setTestAuth(t *testing.T) (*auth.JWTValidator, *rsa.PrivateKey, string) {
+func setupTestAuth(t *testing.T) (*auth.JWTValidator, *rsa.PrivateKey, string) {
 	// 1. Generate private key
 	privateKey, err := rsa.GenerateKey(rand.Reader, 2048)
 	require.NoError(t, err)
@@ -39,8 +41,8 @@ func setTestAuth(t *testing.T) (*auth.JWTValidator, *rsa.PrivateKey, string) {
 	return validator, privateKey, publickeyPEM
 }
 
-func TestNewMiddleware(t *testing.T) *middleware.AuthMiddle {
-	validator, _, _ := setTestAuth(t)
+func TestNewMiddleware(t *testing.T) *AuthMiddle {
+	validator, _, _ := setupTestAuth(t)
 	middleware := NewAuthMiddleware(validator)
 
 	assert.NotNil(t, middleware)
@@ -51,5 +53,69 @@ func TestNewMiddleware(t *testing.T) *middleware.AuthMiddle {
 }
 
 func TestMiddlewareHandleValidToken(t *testing.T) {
-	middleware := TestNewMiddleware(t)
+	validator, privateKey, _ := setupTestAuth(t)
+	token, err := auth.GenerateDemoToken(
+		"tenant_id-123",
+		"user_id-123",
+		[]string{"admin"},
+		privateKey,
+	)
+	require.NoError(t, err)
+	middleware := NewAuthMiddleware(validator)
+
+	// Create test handler
+	handleCalled := false
+	testHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		handleCalled = true
+
+		tenantID, err := auth.ExtractTenantID(r.Context())
+		require.NoError(t, err)
+		require.Equal(t, "tenant_id-123", tenantID)
+
+		userID, err := auth.ExtractUserID(r.Context())
+		require.NoError(t, err)
+		require.Equal(t, "user_id-123", userID)
+
+		w.WriteHeader(http.StatusOK)
+	})
+
+	// create request and  object store response
+	req := httptest.NewRequest("POST", "/mcp", nil)
+	req.Header.Set("Authorization", "Bearer"+token)
+	rr := httptest.NewRecorder() // lưu trữ dữ liệu response vào đây thay cho client/trình duyệt của client
+
+	// Execute
+	handler := middleware.Handler(testHandler)
+	handler.ServeHTTP(rr, req)
+
+	require.Equal(t, handleCalled, true)
+	require.Equal(t, http.StatusOK, rr.Code)
+}
+
+func TestMiddlewareHandleMissingToken(t *testing.T) {
+	validator, _, _ := setupTestAuth(t)
+	middleware := NewAuthMiddleware(validator)
+	testHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Fatal("Handlershould not be called invalid token")
+	})
+
+	// Create request and store response
+	req := httptest.NewRequest("POST", "/mcp", nil)
+	req.Header.Set("Authorization", "Invalid-token")
+	rr := httptest.NewRecorder()
+
+	// Execute
+	handler := middleware.Handler(testHandler)
+	handler.ServeHTTP(rr, req)
+
+	// Verify
+	require.Equal(t, http.StatusUnauthorized, rr.Code)
+
+	var response protocol.Response
+	err := json.NewDecoder(rr.Body).Decode(&response)
+	require.NoError(t, err)
+	assert.NotNil(t, err.Error())
+	assert.NotNil(t, protocol.AuthenticationRequired, response.Error.Code)
+	assert.Contains(t, response.Error.Message, "Authorizaton header required")
+
 }

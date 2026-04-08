@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/x509"
@@ -146,7 +147,7 @@ func TestGenerateToken(t *testing.T) {
 					},
 				}
 				token := jwt.NewWithClaims(jwt.SigningMethodRS256, claims)
-				tokenString, _ := token.SignedString(token)
+				tokenString, _ := token.SignedString(privateKey)
 				return tokenString
 			},
 			wantErr:     true,
@@ -156,32 +157,96 @@ func TestGenerateToken(t *testing.T) {
 		{
 			name: "wrong issuer",
 			tokenFunc: func() string {
+				now := time.Now()
 				claims := Claims{
 					TenantID: "tenant_id-123",
 					UserID:   "user_id-123",
 					Scopes:   []string{"write", "read"},
 					RegisteredClaims: jwt.RegisteredClaims{
-						Issuer:   "wrong issuer", // khác với issuer của validator phía trên,
-						Audience: jwt.ClaimStrings{"mcp-demo"},
+						Issuer:    "wrong issuer", // khác với issuer của validator phía trên,
+						Audience:  jwt.ClaimStrings{"mcp-demo"},
+						ExpiresAt: jwt.NewNumericDate(now.Add(24 * time.Hour)),
+						IssuedAt:  jwt.NewNumericDate(now),
 					},
 				}
 				token := jwt.NewWithClaims(jwt.SigningMethodRS256, claims)
-				tokenString, _ := token.SignedString(token)
+				tokenString, _ := token.SignedString(privateKey)
 				return tokenString
 			},
 			wantErr:     true,
-			errContains: "wrong issuer",
+			errContains: "Invalid issuer",
 		},
 
 		// 5. test case 5
 		{
 			name: "wrong audience",
 			tokenFunc: func() string {
-
+				now := time.Now()
+				claims := Claims{
+					TenantID: "tenant_id-123",
+					UserID:   "user_id-123",
+					Scopes:   []string{"write", "read"},
+					RegisteredClaims: jwt.RegisteredClaims{
+						Issuer:    "mcp-server-demo",
+						Audience:  jwt.ClaimStrings{"wrong-audience"}, // sai so với validator
+						ExpiresAt: jwt.NewNumericDate(now.Add(24 * time.Hour)),
+						IssuedAt:  jwt.NewNumericDate(now),
+					},
+				}
+				token := jwt.NewWithClaims(jwt.SigningMethodRS256, claims)
+				tokenString, _ := token.SignedString(privateKey)
+				return tokenString
 			},
+			wantErr:     true,
+			errContains: "Invalid audience",
 		},
 
 		// 6. test case 6
+		{
+			name: "wrong signing method",
+			tokenFunc: func() string {
+				now := time.Now()
+				claims := Claims{
+					TenantID: "tenant_id-123",
+					UserID:   "user_id-123",
+					Scopes:   []string{"write", "read"},
+					RegisteredClaims: jwt.RegisteredClaims{
+						Issuer:    "mcp-server-demo",
+						Audience:  jwt.ClaimStrings{"mcp-server"},
+						ExpiresAt: jwt.NewNumericDate(now.Add(24 * time.Hour)),
+						IssuedAt:  jwt.NewNumericDate(now),
+					},
+				}
+				// Dùng HS256 với secret là byte array thay vì RSA private key để pass qua SignedString
+				// nhưng sẽ fail ở validator vì validator check RSA
+				token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+				tokenString, _ := token.SignedString([]byte("secret"))
+				return tokenString
+			},
+			wantErr:     true,
+			errContains: "unexpected signing method",
+		},
+		{
+			name: "missing tenant id",
+			tokenFunc: func() string {
+				now := time.Now()
+				claims := Claims{
+					UserID: "user_id-123",
+					Scopes: []string{"write", "read"},
+					RegisteredClaims: jwt.RegisteredClaims{
+						Issuer:    "mcp-server-demo",
+						Audience:  jwt.ClaimStrings{"mcp-server"},
+						ExpiresAt: jwt.NewNumericDate(now.Add(24 * time.Hour)),
+						IssuedAt:  jwt.NewNumericDate(now),
+					},
+				}
+				token := jwt.NewWithClaims(jwt.SigningMethodRS256, claims)
+				tokenString, _ := token.SignedString(privateKey)
+				return tokenString
+			},
+			wantErr:     true,
+			errContains: "tenant_id in claim is required",
+		},
 	}
 
 	for _, tc := range tests {
@@ -203,3 +268,204 @@ func TestGenerateToken(t *testing.T) {
 		})
 	}
 }
+
+func TestExtractTenantID(t *testing.T) {
+	tests := []struct {
+		name     string
+		ctx      context.Context
+		expected string
+		wantErr  bool
+	}{
+		{
+			name:     "valid tenant ID",
+			ctx:      context.WithValue(context.Background(), ContextKeyTenantID, "tenant_id-123"),
+			expected: "tenant_id-123",
+			wantErr:  false,
+		},
+		{
+			name:    "missing tenant ID",
+			ctx:     context.Background(),
+			wantErr: true,
+		},
+		{
+			name:     "invalid tenant ID",
+			ctx:      context.WithValue(context.Background(), ContextKeyTenantID, 123), // using tenantID format integer to fail context.Value()
+			expected: "tenant_id-123",
+			wantErr:  true,
+		},
+		{
+			name:     "empty tenant ID",
+			ctx:      context.WithValue(context.Background(), ContextKeyTenantID, ""),
+			expected: "tenant_id-123",
+			wantErr:  true,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			tenantID, err := ExtractTenantID(tc.ctx)
+			if tc.wantErr {
+				require.Error(t, err)
+				// require.Nil(t, tenantID)
+			} else {
+				require.NoError(t, err)
+				require.NotNil(t, tenantID)
+				require.Equal(t, tc.expected, tenantID)
+			}
+		})
+	}
+}
+
+func TestExtractUserID(t *testing.T) {
+	tests := []struct {
+		name     string
+		ctx      context.Context
+		expected string
+		wantErr  bool
+	}{
+		{
+			name:     "valid user ID",
+			ctx:      context.WithValue(context.Background(), ContextKeyUserID, "user_id-123"),
+			expected: "user_id-123",
+			wantErr:  false,
+		},
+		{
+			name:    "missing user ID",
+			ctx:     context.Background(),
+			wantErr: true,
+		},
+		{
+			name:     "invalid user ID",
+			ctx:      context.WithValue(context.Background(), ContextKeyUserID, 123), // using tenantID format integer to fail context.Value()
+			expected: "user_id-123",
+			wantErr:  true,
+		},
+		{
+			name:     "empty user ID",
+			ctx:      context.WithValue(context.Background(), ContextKeyUserID, ""),
+			expected: "user_id-123",
+			wantErr:  true,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			userID, err := ExtractUserID(tc.ctx)
+			if tc.wantErr {
+				require.Error(t, err)
+				// require.Nil(t, userID)
+			} else {
+				require.NoError(t, err)
+				require.NotNil(t, userID)
+				require.Equal(t, tc.expected, userID)
+			}
+		})
+	}
+}
+
+func TestExtractScopes(t *testing.T) {
+	tests := []struct {
+		name     string
+		ctx      context.Context
+		expected []string
+		wantErr  bool
+	}{
+		{
+			name:     "valid Scopes",
+			ctx:      context.WithValue(context.Background(), ContextKeyScopes, []string{"write", "read"}),
+			expected: []string{"write", "read"},
+			wantErr:  false,
+		},
+		{
+			name:    "missing Scope",
+			ctx:     context.Background(),
+			wantErr: true,
+		},
+		{
+			name:     "invalid Scopes",
+			ctx:      context.WithValue(context.Background(), ContextKeyScopes, 123),
+			expected: []string{"write", "read"},
+			wantErr:  true,
+		},
+		{
+			name:     "empty Scopes",
+			ctx:      context.WithValue(context.Background(), ContextKeyScopes, []string{}),
+			expected: []string{"write", "read"},
+			wantErr:  true,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			Scopes, err := ExtractScopes(tc.ctx)
+			if tc.wantErr {
+				require.Error(t, err)
+				// require.Nil(t, Scopes)
+			} else {
+				require.NoError(t, err)
+				require.NotNil(t, Scopes)
+				require.Equal(t, tc.expected, Scopes)
+			}
+		})
+	}
+}
+
+func TestHasScope(t *testing.T) {
+	tests := []struct {
+		name          string
+		requiredScope string
+		ctx           context.Context
+		wantErr       bool
+	}{
+		{
+			name:          "valid scopes",
+			requiredScope: "read",
+			ctx:           context.WithValue(context.Background(), ContextKeyScopes, []string{"write", "read"}),
+			wantErr:       true,
+		},
+		{
+			name:          "invalid scopes",
+			requiredScope: "delete",
+			ctx:           context.WithValue(context.Background(), ContextKeyScopes, []string{"write", "read"}),
+			wantErr:       false,
+		},
+		{
+			name:          "empty scopes",
+			requiredScope: "delete",
+			ctx:           context.Background(),
+			wantErr:       false,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			flag := hasScope(tc.ctx, tc.requiredScope)
+			require.Equal(t, flag, tc.wantErr)
+		})
+	}
+}
+
+func TestWithAuth(t *testing.T) {
+	claims := Claims{
+		TenantID: "tenant_id-123",
+		UserID:   "user_id-123",
+		Scopes:   []string{"read", "write"},
+	}
+	ctx := context.Background()
+
+	ctx = WithAuth(ctx, &claims)
+	// validate values equation
+	tenantID, err := ExtractTenantID(ctx)
+	require.NoError(t, err)
+	require.Equal(t, claims.TenantID, tenantID)
+
+	userID, err := ExtractUserID(ctx)
+	require.NoError(t, err)
+	require.Equal(t, claims.UserID, userID)
+
+	scopes, err := ExtractScopes(ctx)
+	require.NoError(t, err)
+	require.Equal(t, claims.Scopes, scopes)
+}
+
+// go test -v .
