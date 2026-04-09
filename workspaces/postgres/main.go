@@ -9,7 +9,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-type Config struct {
+type DBConfig struct {
 	Host     string
 	Port     int
 	User     string
@@ -24,7 +24,7 @@ type DB struct {
 	pool *pgxpool.Pool
 }
 
-func (cfg *Config) Validate() error {
+func (cfg *DBConfig) Validate() error {
 	// 1. Kiểm tra các trường BẮT BUỘC phải có
 	if cfg.Host == "" || cfg.User == "" || cfg.DBName == "" {
 		return fmt.Errorf("host, user, and dbname are required")
@@ -46,7 +46,7 @@ func (cfg *Config) Validate() error {
 	return nil
 }
 
-func NewDB(ctx context.Context, cfg Config) (*DB, error) {
+func NewDB(ctx context.Context, cfg DBConfig) (*DB, error) {
 	// 0.Validate config
 	err := cfg.Validate()
 	if err != nil {

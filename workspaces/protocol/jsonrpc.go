@@ -4,6 +4,7 @@ const JSONRPCVersion = "2.0"
 
 const (
 	AuthenticationRequired = -32001
+	RateLimitExceeded      = -32004
 )
 
 type Error struct {
