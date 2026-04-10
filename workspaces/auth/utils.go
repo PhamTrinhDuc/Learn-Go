@@ -28,7 +28,7 @@ func GenerateDemoTokenWithExpiry(
 			NotBefore: jwt.NewNumericDate(now),             //
 		},
 	}
-	token := jwt.NewWithClaims(jwt.SigningMethodES256, claims)
+	token := jwt.NewWithClaims(jwt.SigningMethodRS256, claims)
 	tokenString, err := token.SignedString(privateKey)
 	if err != nil {
 		return "", fmt.Errorf("failed to sign token: %w", err)

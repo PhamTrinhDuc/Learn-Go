@@ -118,7 +118,7 @@ func (db *DB) BeginTx(ctx context.Context, tenantID string) (pgx.Tx, error) {
 }
 
 func main() {
-	cfg := Config{
+	cfg := DBConfig{
 		Host:     "localhost",
 		Port:     5433,
 		User:     "postgres",

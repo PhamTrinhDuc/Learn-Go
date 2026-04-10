@@ -1,10 +1,10 @@
 package middleware
 
 import (
-	"auth"
 	"encoding/json"
+	"learn-go/workspaces/auth"
+	"learn-go/workspaces/protocol"
 	"net/http"
-	protocol "protocal"
 )
 
 type AuthMiddle struct {
@@ -35,7 +35,8 @@ func (am *AuthMiddle) Handler(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// 1. Get header
 		authHeader := r.Header.Get("Authorization")
-		if authHeader != "" {
+		// fmt.Println("auth token: ", authHeader)
+		if authHeader == "" {
 			am.SendError(w, nil, protocol.AuthenticationRequired, "Authorization header required")
 			return
 		}

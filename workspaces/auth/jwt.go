@@ -61,7 +61,7 @@ func NewJWTValidator(cfg Config) (*JWTValidator, error) {
 // ValidateToken validates JWT token and return claims
 func (v *JWTValidator) ValidateToken(tokenString string) (*Claims, error) {
 	// 1.Remove Bearer prefix in tokenString
-	tokenString = strings.TrimPrefix(tokenString, "Bearer")
+	tokenString = strings.TrimPrefix(tokenString, "Bearer ")
 	// 2. Parse and validate token
 	token, err := jwt.ParseWithClaims(
 		tokenString, // token để parse

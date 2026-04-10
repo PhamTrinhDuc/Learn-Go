@@ -13,24 +13,24 @@ import (
 func TestNewDB(t *testing.T) {
 	tests := []struct {
 		name    string
-		config  Config
+		config  DBConfig
 		wantErr bool
 	}{
 		// TC0: Missing 1 số trường quan trọng
 		{
 			name:    "missing host",
-			config:  Config{Port: 5432, DBName: "test"},
+			config:  DBConfig{Port: 5432, DBName: "test"},
 			wantErr: true,
 		},
 		{
 			name:    "invalid port",
-			config:  Config{Host: "localhost", Port: 0, DBName: "test"},
+			config:  DBConfig{Host: "localhost", Port: 0, DBName: "test"},
 			wantErr: true,
 		},
 		// TC1: pass thiếu 1 số trường
 		{
 			name: "Parse config err",
-			config: Config{
+			config: DBConfig{
 				Host:     "localhost",
 				Port:     5433,
 				User:     "postgres",
@@ -42,7 +42,7 @@ func TestNewDB(t *testing.T) {
 		// TC2: Pool connection & Ping (on db => false/ off db => true)
 		{
 			name: "Pool connection err",
-			config: Config{
+			config: DBConfig{
 				Host:     "localhost",
 				Port:     5433,
 				User:     "postgres",
@@ -82,8 +82,8 @@ func getEnvOrDefault(key, defaultValue string) string {
 	return defaultValue
 }
 
-func GetDBConfig() Config {
-	return Config{
+func GetDBConfig() DBConfig {
+	return DBConfig{
 		Host:     getEnvOrDefault("DB_HOST", "localhost"),
 		Port:     5433,
 		User:     getEnvOrDefault("DB_USER", "postgres"),
