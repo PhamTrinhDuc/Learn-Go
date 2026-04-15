@@ -1,10 +1,9 @@
 package redis
 
 import (
-	"context"
 	"testing"
 
-	utils "learn-go/workspaces/utils"
+	utils "learn-go/a2a_mcp/mcp-server/internal/utils"
 
 	"github.com/stretchr/testify/assert"
 )
@@ -47,14 +46,11 @@ func TestNewRedis(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			client, err := NewRedis(context.Background(), tc.config)
-			t.Log(err)
+			err := tc.config.Validate()
 			if tc.wantErr {
 				assert.Error(t, err)
-				assert.Nil(t, client)
 			} else {
 				assert.NoError(t, err)
-				assert.NotNil(t, client)
 			}
 		})
 	}

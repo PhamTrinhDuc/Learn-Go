@@ -2,8 +2,8 @@ package middleware
 
 import (
 	"encoding/json"
-	"learn-go/workspaces/auth"
-	"learn-go/workspaces/protocol"
+	"learn-go/a2a_mcp/mcp-server/internal/auth"
+	"learn-go/a2a_mcp/mcp-server/internal/protocol"
 	"net/http"
 )
 

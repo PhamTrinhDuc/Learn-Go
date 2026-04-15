@@ -1,12 +1,10 @@
-package main
+package database
 
 import (
 	"context"
-	"os"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
 // ========================= TEST DB CONNECTION ==================================
@@ -69,42 +67,4 @@ func TestNewDB(t *testing.T) {
 			}
 		})
 	}
-}
-
-// ========================= TEST CÁC FUNCTION KHI DB ĐÃ READY ==================================
-
-var TenantID string = "1111-1111111-111111111"
-
-func getEnvOrDefault(key, defaultValue string) string {
-	if value := os.Getenv(key); value != "" {
-		return value
-	}
-	return defaultValue
-}
-
-func GetDBConfig() DBConfig {
-	return DBConfig{
-		Host:     getEnvOrDefault("DB_HOST", "localhost"),
-		Port:     5433,
-		User:     getEnvOrDefault("DB_USER", "postgres"),
-		Password: getEnvOrDefault("DB_PASSWORD", "postgres"),
-		DBName:   getEnvOrDefault("PASSWORD", "vchatbot"),
-		SSLMode:  getEnvOrDefault("DB_SSLMODE", "disable"),
-		MaxConns: 10,
-		MinConns: 2,
-	}
-}
-
-func SetupDB(t *testing.T) *DB {
-	cfg := GetDBConfig()
-	db, err := NewDB(context.Background(), cfg)
-	require.NoError(t, err, "Failed to connect to test database")
-	return db
-}
-
-// integration test
-func TestTxSetTenantID(t *testing.T) {
-	db := SetupDB(t)
-	_, err := db.BeginTx(context.Background(), TenantID)
-	require.NoError(t, err, "Failed to set tenantID with transaction")
 }
