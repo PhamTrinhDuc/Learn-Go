@@ -16,9 +16,6 @@ type Store interface {
 
 	// HybridSearch performs hybrid BM25 + vector search with RRF
 	HybridSearch(ctx context.Context, tenantID string, params HybridSearchParams) ([]HybridSearchResult, error)
-
-	// SimpleHybridSearch performs simple weighted hybrid search
-	SimpleHybridSearch(ctx context.Context, tenantID string, params HybridSearchParams) ([]HybridSearchResult, error)
 }
 
 // Ensure DB implements Store interface

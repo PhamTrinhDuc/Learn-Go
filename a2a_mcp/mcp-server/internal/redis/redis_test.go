@@ -3,7 +3,7 @@ package redis
 import (
 	"testing"
 
-	utils "learn-go/a2a_mcp/mcp-server/internal/utils"
+	utils "learn-go/a2a_mcp/pkg/utils"
 
 	"github.com/stretchr/testify/assert"
 )
@@ -58,9 +58,9 @@ func TestNewRedis(t *testing.T) {
 
 func GetRedisConfig() RedisConfig {
 	return RedisConfig{
-		Host:     utils.GetEnvOrDefault("REDIS_HOST", "localhost"),
-		Port:     6379,
-		Username: utils.GetEnvOrDefault("REDIS_USERNAME", "jiyuu"),
-		Password: utils.GetEnvOrDefault("REDIS_PASSWORD", "a2amcpgo"),
+		Host:     utils.GetEnvString("REDIS_HOST", "localhost"),
+		Port:     utils.GetEnvInt("REDIS_PORT", 6379),
+		Username: utils.GetEnvString("REDIS_USERNAME", "jiyuu"),
+		Password: utils.GetEnvString("REDIS_PASSWORD", "a2amcpgo"),
 	}
 }

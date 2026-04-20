@@ -1,0 +1,47 @@
+services:
+  ollama:
+    image: ollama/ollama:latest
+    # container_name: ollama
+    # restart: unless-stopped
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama   # luu model xuong day, khong bi mat khi restart
+    environment:
+      - OLLAMA_MAX_LOADED_MODELS=2  # giu ca 2 model trong memory cung luc
+      - OLLAMA_HOST=0.0.0.0         # cho phep goi tu ngoai container
+    healthcheck:
+      test: ["CMD-SHELL", "ollama list || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Container nay chi chay 1 lan de pull model, sau do tu exit
+  ollama-init:
+    image: ollama/ollama:latest
+    # container_name: ollama-init
+    depends_on:
+      ollama:
+        condition: service_healthy
+    volumes:
+      - ollama_data:/root/.ollama
+    environment:
+      - OLLAMA_HOST=ollama:11434
+    entrypoint: >
+      /bin/sh -c "
+        echo '[*] Pulling qwen3.5:0.8b ...' &&
+        ollama pull qwen3.5:0.8b &&
+        echo '[OK] qwen3.5:0.8b done' &&
+        echo '[*] Pulling qwen3-embedding:0.6b ...' &&
+        ollama pull qwen3-embedding:0.6b &&
+        echo '[OK] qwen3-embedding:0.6b done' &&
+        echo '' &&
+        echo '[*] Warming up models ...' &&
+        ollama run qwen3.5:0.8b 'hi' &&
+        echo '[OK] Models are ready!'
+      "
+    restart: "no"
+
+volumes:
+  ollama_data:
+    name: ollama_data

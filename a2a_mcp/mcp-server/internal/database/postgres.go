@@ -3,6 +3,7 @@ package database
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -28,14 +29,9 @@ type Document struct {
 	Content   string                 `json:"content"`
 	Metadata  map[string]interface{} `json:"metadata"`
 	Embedding []float32              `json:"embedding,omitempty"`
-	CreateAt  time.Time              `json:"create_at"`
+	CreatedAt time.Time              `json:"creatd_at"`
 	UpdatedAt time.Time              `json:"updated_at"`
-	CreateBy  *string                `json:"create_by,omitempty"` // use pointer to handle NULL
-}
-
-type DocumentRAG struct {
-	Document Document
-	Score    float64
+	CreatedBy *string                `json:"created_by,omitempty"` // use pointer to handle NULL
 }
 
 type DB struct {
@@ -135,12 +131,107 @@ func (db *DB) BeginTx(ctx context.Context, tenantID string) (pgx.Tx, error) {
 	return tx, nil
 }
 
+// InsertDocument inserts a new document
+func (db *DB) InsertDocument(ctx context.Context, tenantID string, doc *Document) error {
+	tx, err := db.BeginTx(ctx, tenantID)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+
+	query := `
+		INSERT INTO documents (tenant_id, title, content, metadata, embedding, created_by) 
+		VALUES ($1, $2, $3, $4, $5, $6)
+		RETURNING id, created_at, updated_at
+	`
+	var embedding interface{}
+	if doc.Embedding != nil {
+		embedding = pgvector.NewVector(doc.Embedding)
+	}
+	err = tx.QueryRow(
+		ctx,
+		query,
+		doc.TenantID,
+		doc.Title,
+		doc.Content,
+		doc.Metadata,
+		embedding,
+		doc.CreatedBy,
+	).Scan(&doc.ID, &doc.CreatedAt, &doc.UpdatedAt)
+
+	if err != nil {
+		return fmt.Errorf("failed to insert document to DB: %w", err)
+	}
+	return tx.Commit(ctx)
+}
+
+// InsertBatchingDocument inserts batching new documents
+func (db *DB) InsertBatchingDocument(ctx context.Context, tenantID string, docs []*Document, numFields int) error {
+	if len(docs) == 0 {
+		return fmt.Errorf("Find 0 documents. Documents is required")
+	}
+
+	tx, err := db.BeginTx(ctx, tenantID)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+
+	// 1. Chuẩn bị các thành phần cho câu query
+	index := 1
+	valueStrings := make([]string, 0, len(docs))
+	valueArgs := make([]interface{}, 0, numFields)
+
+	for _, doc := range docs {
+		placeholders := make([]string, numFields)
+		for i := range placeholders {
+			placeholders[i] = fmt.Sprintf("$%d", index)
+			index++
+		}
+		valueStrings = append(valueStrings, "("+strings.Join(placeholders, ", ")+")")
+		var embedding interface{}
+		if doc.Embedding != nil {
+			embedding = pgvector.NewVector(doc.Embedding)
+		}
+
+		valueArgs = append(valueArgs,
+			doc.TenantID,
+			doc.Title,
+			doc.Content,
+			doc.Metadata,
+			embedding,
+			doc.CreatedBy,
+		)
+	}
+	// 2. Ghép nối câu query hoàn chỉnh
+	query := fmt.Sprintf(`
+		INSERT INTO documents (tenant_id, title, content, metadata, embedding, created_by)
+		VALUES %s
+		RETURNING id, created_at, updated_at`,
+		strings.Join(valueStrings, ","),
+	)
+
+	// 3. Thực thi
+	rows, err := tx.Query(ctx, query, valueArgs...)
+	if err != nil {
+		return fmt.Errorf("Error during perform batching query: %w", err)
+	}
+
+	defer rows.Close()
+
+	// 4. Scan kết quả ngược lại cho từng Document
+	i := 0
+	for rows.Next() {
+		if err := rows.Scan(&docs[i].ID, &docs[i].CreatedAt, &docs[i].UpdatedAt); err != nil {
+			return err
+		}
+		i++
+	}
+	return tx.Commit(ctx)
+}
+
 // Search document using metadata (title, content, metadata match with query)
-func (db *DB) SearchDocuments(
-	ctx context.Context,
-	tenantID string,
-	query string,
-	limit int) ([]*Document, error) {
+func (db *DB) SearchDocuments(ctx context.Context, tenantID string, query string, limit int) ([]*Document, error) {
 	tx, err := db.BeginTx(ctx, tenantID)
 	if err != nil {
 		return nil, err
@@ -148,17 +239,14 @@ func (db *DB) SearchDocuments(
 	defer tx.Rollback(ctx)
 
 	searchQuery := `
-		SELECT id, tenant_id, title, content, metadata, create_at, updated_at, created_by
+		SELECT id, tenant_id, title, content, metadata, created_at, updated_at, created_by
 		FROM documents 
 		WHERE 
-			title ILIKE $1 OR 
-			content ILIKE $1 OR 
-			metadata::text ILIKE $1 
-		ORDER BY created_at DESC 
+			to_tsvector('simple', f_unaccent(title || ' ' || content)) @@ websearch_to_tsquery('simple', unaccent($1))
+		ORDER BY ts_rank_cd(to_tsvector('simple', f_unaccent(title || ' ' || content)), websearch_to_tsquery('simple', unaccent($1))) DESC
 		LIMIT $2
 	`
-	searchPattern := "%" + query + "%"
-	rows, err := tx.Query(ctx, searchQuery, searchPattern, limit)
+	rows, err := tx.Query(ctx, searchQuery, query, limit)
 	if err != nil {
 		return nil, fmt.Errorf("failed to search documents: %w", err)
 	}
@@ -174,11 +262,10 @@ func (db *DB) SearchDocuments(
 			&doc.Title,
 			&doc.Content,
 			&doc.Metadata,
-			&doc.CreateAt,
+			&doc.CreatedAt,
 			&doc.UpdatedAt,
-			&doc.UpdatedAt,
+			&doc.CreatedBy,
 		)
-
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan document: %w", err)
 		}
@@ -187,67 +274,36 @@ func (db *DB) SearchDocuments(
 	return documents, nil
 }
 
-// VectorSearch performs similarity search using pgvector
-func (db *DB) VectorSearch(
-	ctx context.Context,
-	tenantID string,
-	query string,
-	embedding []float32,
-	limit int,
-) ([]*DocumentRAG, error) {
+func (db *DB) GetDocument(ctx context.Context, tenantID, docID string) (*Document, error) {
 	tx, err := db.BeginTx(ctx, tenantID)
 	if err != nil {
 		return nil, err
 	}
 	defer tx.Rollback(ctx)
 
-	query = `
-		SELECT id, tenant_id, title, content, metadata, create_at, updated_at, created_by, 
-		1 - (embedding <=>$1) AS similarity_score
-		FROM documents 
-		WHERE embedding IS NOT NULL 
-		ORDER BY embedding <=> $1
-		LIMIT $2
+	query := `
+		SELECT id, tenant_id, title, content, metadata, embedding, created_at, updated_at, created_by
+		FROM documents
+		WHERE id = $1
 	`
-
-	vec := pgvector.NewVector(embedding)
-	rows, err := tx.Query(ctx, query, vec, limit)
+	doc := &Document{}
+	var dbEmbedding *pgvector.Vector
+	err = tx.QueryRow(ctx, query, docID).Scan(
+		&doc.ID, &doc.TenantID, &doc.Title, &doc.Content, &doc.Metadata,
+		&dbEmbedding, &doc.CreatedAt, &doc.UpdatedAt, &doc.CreatedBy,
+	)
+	if err == pgx.ErrNoRows {
+		return nil, fmt.Errorf("document not found")
+	}
 	if err != nil {
-		return nil, fmt.Errorf("failed to perform vector search: %w", err)
+		return nil, fmt.Errorf("failed to get document: %w", err)
 	}
 
-	defer rows.Close()
-
-	var documents []*DocumentRAG
-
-	for rows.Next() {
-		doc := &Document{}
-		var score float64
-		var dbEmbedding pgvector.Vector
-
-		err := rows.Scan(
-			&doc.ID,
-			&doc.TenantID,
-			&doc.Title,
-			&doc.Content,
-			&doc.Metadata,
-			&dbEmbedding,
-			&doc.CreateAt,
-			&doc.UpdatedAt,
-			&doc.UpdatedAt,
-			&score,
-		)
-
-		if err != nil {
-			return nil, fmt.Errorf("failed to Scan documents: %w", err)
-		}
+	if dbEmbedding != nil {
 		doc.Embedding = dbEmbedding.Slice()
-		documents = append(documents, &DocumentRAG{
-			Document: *doc,
-			Score:    score,
-		})
 	}
-	return documents, nil
+
+	return doc, nil
 }
 
 // ListDocuments lists all documents for a tenant
@@ -259,7 +315,7 @@ func (db *DB) ListDocuments(ctx context.Context, tenantID string, limit int, off
 	defer tx.Rollback(ctx)
 
 	query := `
-		SELECT id, tenant_id, title, content, metadata, create_at, updated_at, created_by
+		SELECT id, tenant_id, title, content, metadata, created_at, updated_at, created_by
 		FROM documents 
 		ORDER BY created_at DESC 
 		LIMIT $1 OFFSET $2
@@ -281,9 +337,9 @@ func (db *DB) ListDocuments(ctx context.Context, tenantID string, limit int, off
 			&doc.Title,
 			&doc.Content,
 			&doc.Metadata,
-			&doc.CreateAt,
+			&doc.CreatedAt,
 			&doc.UpdatedAt,
-			&doc.UpdatedAt,
+			&doc.CreatedBy,
 		)
 
 		if err != nil {
@@ -319,7 +375,7 @@ func (db *DB) UpdateDocument(ctx context.Context, tenantID string, doc *Document
 }
 
 // DeleteDocument deletes a document by ID
-func (db *DB) DeleteDocument(ctx context.Context, tenantID string, docID string) error {
+func (db *DB) DeleteDocumentByID(ctx context.Context, tenantID string, docID string) error {
 	tx, err := db.BeginTx(ctx, tenantID)
 	if err != nil {
 		return err
@@ -328,6 +384,26 @@ func (db *DB) DeleteDocument(ctx context.Context, tenantID string, docID string)
 
 	query := `DELETE FROM documents WHERE id = $1`
 	result, err := tx.Exec(ctx, query, docID)
+	if err != nil {
+		return nil
+	}
+
+	if result.RowsAffected() == 0 {
+		return fmt.Errorf("document not found")
+	}
+	return tx.Commit(ctx)
+}
+
+// DeleteDocument deletes a document by ID
+func (db *DB) DeleteDocumentByTenantID(ctx context.Context, tenantID string) error {
+	tx, err := db.BeginTx(ctx, tenantID)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+
+	query := `DELETE FROM documents WHERE tenant_id = $1`
+	result, err := tx.Exec(ctx, query, tenantID)
 	if err != nil {
 		return nil
 	}
@@ -352,27 +428,4 @@ func (db *DB) GetTenantSettings(ctx context.Context, tenantID string) (map[strin
 	}
 
 	return settings, nil
-}
-
-func main() {
-	cfg := DBConfig{
-		Host:     "localhost",
-		Port:     5433,
-		User:     "postgres",
-		Password: "postgres",
-		DBName:   "vchatbot",
-		SSLMode:  "disable",
-		MaxConns: 10,
-		MinConns: 2,
-	}
-
-	ctx := context.Background()
-
-	_, err := NewDB(ctx, cfg)
-	if err != nil {
-		fmt.Printf("failed to initialize database: %v\n", err)
-		return
-	}
-	fmt.Println("Successfully connected to database!")
-	// row := db.pool.QueryRow(ctx, "SELECT * FROM companies")
 }

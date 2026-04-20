@@ -7,10 +7,12 @@ import (
 	"learn-go/a2a_mcp/mcp-server/internal/auth"
 	"learn-go/a2a_mcp/mcp-server/internal/database"
 	"learn-go/a2a_mcp/mcp-server/internal/protocol"
+	"learn-go/a2a_mcp/pkg/ollama"
 )
 
 type SearchTool struct {
-	db database.Store
+	db    database.Store
+	model *ollama.Client
 }
 
 type SearchParams struct {
@@ -18,8 +20,8 @@ type SearchParams struct {
 	Limit int    `json:"limit"`
 }
 
-func NewSearchTool(db database.Store) *SearchTool {
-	return &SearchTool{db: db}
+func NewSearchTool(db database.Store, model *ollama.Client) *SearchTool {
+	return &SearchTool{db: db, model: model}
 }
 
 // Definition returns the tool definition for MCP
@@ -70,7 +72,7 @@ func (t *SearchTool) Execute(
 
 	if params.Query == "" {
 		return protocol.ToolCallResult{IsError: true},
-			fmt.Errorf("Query is required: %w")
+			fmt.Errorf("query is required")
 	}
 
 	if params.Limit <= 0 {
@@ -80,21 +82,36 @@ func (t *SearchTool) Execute(
 		params.Limit = 50
 	}
 
-	// 4. Execute search
-	documents, err := t.db.SearchDocuments(ctx, tenantID, params.Query, params.Limit)
+	// 4. Generate embedding for the query
+	embeddings, err := t.model.GenerateEmbeddings(ctx, []string{params.Query})
 	if err != nil {
 		return protocol.ToolCallResult{IsError: true},
-			fmt.Errorf("failed to perform search document: %w", err)
+			fmt.Errorf("failed to generate embedding for query: %w", err)
+	}
+
+	// 5. Execute Hybrid Search
+	searchParams := database.HybridSearchParams{
+		Query:        params.Query,
+		Embedding:    embeddings[0],
+		Limit:        params.Limit,
+		BM25Weight:   0.7, // Thiên hướng tìm từ khóa chính xác
+		VectorWeight: 0.3, // Kết hợp với ý nghĩa vector
+	}
+	results, err := t.db.HybridSearch(ctx, tenantID, searchParams)
+	if err != nil {
+		return protocol.ToolCallResult{IsError: true},
+			fmt.Errorf("failed to perform hybrid search: %w", err)
 	}
 
 	// Formats results for LLM
 	var resultText string
-	if len(documents) == 0 {
+	if len(results) == 0 {
 		resultText = fmt.Sprintf("No documents found matching query: %s", params.Query)
 	} else {
-		resultText = fmt.Sprintf("Found %d document(s) matching query: %s\n\n", len(documents), params.Query)
-		for i, doc := range documents {
-			resultText += fmt.Sprintf("Document %d:\n", i+1)
+		resultText = fmt.Sprintf("Found %d document(s) matching query: %s\n\n", len(results), params.Query)
+		for i, res := range results {
+			doc := res.Document
+			resultText += fmt.Sprintf("Document %d (Score: %.4f):\n", i+1, res.CombinedScore)
 			resultText += fmt.Sprintf("  ID: %s\n", doc.ID)
 			resultText += fmt.Sprintf("  Title: %s\n", doc.Title)
 			resultText += fmt.Sprintf("  Content Preview: %.200s...\n", doc.Content)

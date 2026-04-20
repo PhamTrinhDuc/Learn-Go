@@ -31,9 +31,9 @@ func TestNewDB(t *testing.T) {
 			config: DBConfig{
 				Host:     "localhost",
 				Port:     5433,
-				User:     "postgres",
-				Password: "postgres",
-				DBName:   "vchatbot",
+				User:     "mcp_user",
+				Password: "mcp_password",
+				DBName:   "mcp_db",
 			},
 			wantErr: false,
 		},
@@ -43,9 +43,9 @@ func TestNewDB(t *testing.T) {
 			config: DBConfig{
 				Host:     "localhost",
 				Port:     5433,
-				User:     "postgres",
-				Password: "postgres",
-				DBName:   "vchatbot",
+				User:     "mcp_user",
+				Password: "mcp_password",
+				DBName:   "mcp_db",
 				SSLMode:  "disable",
 				MaxConns: 10,
 				MinConns: 2,
@@ -68,3 +68,5 @@ func TestNewDB(t *testing.T) {
 		})
 	}
 }
+
+

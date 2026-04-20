@@ -4,7 +4,7 @@ import (
 	"context"
 	auth "learn-go/a2a_mcp/mcp-server/internal/auth"
 	my_redis "learn-go/a2a_mcp/mcp-server/internal/redis"
-	utils "learn-go/a2a_mcp/mcp-server/internal/utils"
+	utils "learn-go/a2a_mcp/pkg/utils"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -16,10 +16,10 @@ import (
 
 func SetUpRedis(t *testing.T) *my_redis.RedisClient {
 	client, err := my_redis.NewRedis(context.Background(), my_redis.RedisConfig{
-		Host:     utils.GetEnvOrDefault("REDIS_HOST", "localhost"),
-		Port:     6379,
-		Username: utils.GetEnvOrDefault("REDIS_USERNAME", "jiyuu"),
-		Password: utils.GetEnvOrDefault("REDIS_PASSWORD", "a2amcpgo"),
+		Host:     utils.GetEnvString("REDIS_HOST", "localhost"),
+		Port:     utils.GetEnvInt("REDIS_PORT", 6379),
+		Username: utils.GetEnvString("REDIS_USERNAME", "jiyuu"),
+		Password: utils.GetEnvString("REDIS_PASSWORD", "a2amcpgo"),
 	})
 	require.NoError(t, err)
 	assert.NotNil(t, client)
