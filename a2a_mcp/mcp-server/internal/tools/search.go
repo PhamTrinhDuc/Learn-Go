@@ -7,12 +7,10 @@ import (
 	"learn-go/a2a_mcp/mcp-server/internal/auth"
 	"learn-go/a2a_mcp/mcp-server/internal/database"
 	"learn-go/a2a_mcp/mcp-server/internal/protocol"
-	"learn-go/a2a_mcp/pkg/ollama"
 )
 
 type SearchTool struct {
-	db    database.Store
-	model *ollama.Client
+	db database.Store
 }
 
 type SearchParams struct {
@@ -20,8 +18,8 @@ type SearchParams struct {
 	Limit int    `json:"limit"`
 }
 
-func NewSearchTool(db database.Store, model *ollama.Client) *SearchTool {
-	return &SearchTool{db: db, model: model}
+func NewSearchTool(db database.Store) *SearchTool {
+	return &SearchTool{db: db}
 }
 
 // Definition returns the tool definition for MCP
@@ -46,72 +44,50 @@ func (t *SearchTool) Definition() protocol.Tool {
 	}
 }
 
-func (t *SearchTool) Execute(
-	ctx context.Context,
-	args map[string]interface{}) (protocol.ToolCallResult, error) {
-	// 1. Extract tenant ID from context
+// Execute performs the search operation
+func (t *SearchTool) Execute(ctx context.Context, args map[string]interface{}) (protocol.ToolCallResult, error) {
+	// Extract tenant ID from context
 	tenantID, err := auth.ExtractTenantID(ctx)
 	if err != nil {
-		return protocol.ToolCallResult{IsError: true},
-			fmt.Errorf("authentication required: %w", err)
+		return protocol.ToolCallResult{IsError: true}, fmt.Errorf("authentication required: %w", err)
 	}
 
-	// 2. Parse json parameters
-	argsJson, err := json.Marshal(args)
+	// Parse parameters
+	argsJSON, err := json.Marshal(args)
 	if err != nil {
-		return protocol.ToolCallResult{IsError: true},
-			fmt.Errorf("failed to parse json arguments")
+		return protocol.ToolCallResult{IsError: true}, fmt.Errorf("invalid arguments: %w", err)
 	}
 
-	// 3. Valid params
 	var params SearchParams
-	if err := json.Unmarshal(argsJson, &params); err != nil {
-		return protocol.ToolCallResult{IsError: true},
-			fmt.Errorf("failed to convert args to schema: %w", err)
+	if err := json.Unmarshal(argsJSON, &params); err != nil {
+		return protocol.ToolCallResult{IsError: true}, fmt.Errorf("invalid arguments: %w", err)
 	}
 
+	// Validate parameters
 	if params.Query == "" {
-		return protocol.ToolCallResult{IsError: true},
-			fmt.Errorf("query is required")
+		return protocol.ToolCallResult{IsError: true}, fmt.Errorf("query is required")
 	}
-
 	if params.Limit <= 0 {
 		params.Limit = 10
 	}
 	if params.Limit > 100 {
-		params.Limit = 50
+		params.Limit = 100
 	}
 
-	// 4. Generate embedding for the query
-	embeddings, err := t.model.GenerateEmbeddings(ctx, []string{params.Query})
+	// Perform search
+	documents, err := t.db.SearchDocuments(ctx, tenantID, params.Query, params.Limit)
 	if err != nil {
-		return protocol.ToolCallResult{IsError: true},
-			fmt.Errorf("failed to generate embedding for query: %w", err)
+		return protocol.ToolCallResult{IsError: true}, fmt.Errorf("search failed: %w", err)
 	}
 
-	// 5. Execute Hybrid Search
-	searchParams := database.HybridSearchParams{
-		Query:        params.Query,
-		Embedding:    embeddings[0],
-		Limit:        params.Limit,
-		BM25Weight:   0.7, // Thiên hướng tìm từ khóa chính xác
-		VectorWeight: 0.3, // Kết hợp với ý nghĩa vector
-	}
-	results, err := t.db.HybridSearch(ctx, tenantID, searchParams)
-	if err != nil {
-		return protocol.ToolCallResult{IsError: true},
-			fmt.Errorf("failed to perform hybrid search: %w", err)
-	}
-
-	// Formats results for LLM
+	// Format results
 	var resultText string
-	if len(results) == 0 {
+	if len(documents) == 0 {
 		resultText = fmt.Sprintf("No documents found matching query: %s", params.Query)
 	} else {
-		resultText = fmt.Sprintf("Found %d document(s) matching query: %s\n\n", len(results), params.Query)
-		for i, res := range results {
-			doc := res.Document
-			resultText += fmt.Sprintf("Document %d (Score: %.4f):\n", i+1, res.CombinedScore)
+		resultText = fmt.Sprintf("Found %d document(s) matching query: %s\n\n", len(documents), params.Query)
+		for i, doc := range documents {
+			resultText += fmt.Sprintf("Document %d:\n", i+1)
 			resultText += fmt.Sprintf("  ID: %s\n", doc.ID)
 			resultText += fmt.Sprintf("  Title: %s\n", doc.Title)
 			resultText += fmt.Sprintf("  Content Preview: %.200s...\n", doc.Content)
@@ -119,6 +95,7 @@ func (t *SearchTool) Execute(
 				metadataJSON, _ := json.Marshal(doc.Metadata)
 				resultText += fmt.Sprintf("  Metadata: %s\n", string(metadataJSON))
 			}
+			resultText += fmt.Sprintf("  Created: %s\n", doc.CreatedAt.Format("2006-01-02 15:04:05"))
 			resultText += "\n"
 		}
 	}

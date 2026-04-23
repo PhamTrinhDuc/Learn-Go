@@ -21,11 +21,11 @@ import (
 type Config struct {
 	ServiceName    string
 	ServiceVersion string
-	Enviroment     string
+	Environment    string
 	OTLPEndpoint   string
 	SamplingRate   float64
 	EnableTracing  bool
-	EnableMetric   bool
+	EnableMetrics  bool
 }
 
 type Telemetry struct {
@@ -45,7 +45,7 @@ func NewTelemetry(ctx context.Context, cfg Config) (*Telemetry, error) {
 			"",
 			semconv.ServiceName(cfg.ServiceName),
 			semconv.ServiceVersion(cfg.ServiceVersion),
-			semconv.DeploymentEnvironmentName(cfg.Enviroment),
+			semconv.DeploymentEnvironmentName(cfg.Environment),
 		),
 	)
 	if err != nil {
@@ -60,7 +60,7 @@ func NewTelemetry(ctx context.Context, cfg Config) (*Telemetry, error) {
 			return nil, fmt.Errorf("failed to init tracing: %w", err)
 		}
 	}
-	if cfg.EnableMetric {
+	if cfg.EnableMetrics {
 		if err := t.initMetrics(res); err != nil {
 			return nil, fmt.Errorf("failed to init metrics: %w", err)
 		}

@@ -30,9 +30,10 @@ services:
       - "6379:6379"
     volumes:
       - redis_data:/data
-    command: redis-server --appendonly yes
+      - ./config/redis.conf:/usr/local/etc/redis/redis.conf
+    command: redis-server /usr/local/etc/redis/redis.conf
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: ["CMD", "redis-cli", "-u", "redis://jiyuu:a2amcpgo@localhost:6379", "ping"]
       interval: 10s
       timeout: 5s
       retries: 5

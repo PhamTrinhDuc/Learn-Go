@@ -9,13 +9,14 @@ import (
 )
 
 type RedisConfig struct {
-	Host     string
-	Port     int
-	Username string
-	Password string
-	DB       int //Redis có nhiều database (thường 0-15)
-	PoolSize int // tương đương MaxConns trong PG - tối đa X connect 1 lúc
-	MinCons  int // tương đương MinConns trong PG - tối thiếu X connect 1 lúc
+	Host        string
+	Port        int
+	Username    string
+	Password    string
+	DB          int //Redis có nhiều database (thường 0-15)
+	PoolSize    int // tương đương MaxConns trong PG - tối đa X connect 1 lúc
+	MinCons     int // tương đương MinConns trong PG - tối thiếu X connect 1 lúc
+	FixedWindow interface{}
 }
 
 type RedisClient struct {
