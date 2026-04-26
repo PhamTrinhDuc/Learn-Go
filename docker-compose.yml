@@ -30,7 +30,7 @@ services:
       - "6379:6379"
     volumes:
       - redis_data:/data
-      - ./config/redis.conf:/usr/local/etc/redis/redis.conf
+      - ./docker.config/redis.conf:/usr/local/etc/redis/redis.conf
     command: redis-server /usr/local/etc/redis/redis.conf
     healthcheck:
       test: ["CMD", "redis-cli", "-u", "redis://jiyuu:a2amcpgo@localhost:6379", "ping"]
@@ -68,7 +68,7 @@ services:
   #   ports:
   #     - "9090:9090"
   #   volumes:
-  #     - ./config/prometheus.yml:/etc/prometheus/prometheus.yml
+  #     - ./docker.config/prometheus.yml:/etc/prometheus/prometheus.yml
   #     - prometheus_data:/prometheus
   #   command:
   #     - '--config.file=/etc/prometheus/prometheus.yml'
@@ -90,7 +90,7 @@ services:
   #     GF_INSTALL_PLUGINS: grafana-piechart-panel
   #   volumes:
   #     - grafana_data:/var/lib/grafana
-  #     - ./config/grafana-datasources.yml:/etc/grafana/provisioning/datasources/datasources.yml
+  #     - ./docker.config/grafana-datasources.yml:/etc/grafana/provisioning/datasources/datasources.yml
   #   depends_on:
   #     - prometheus
   #   networks:
