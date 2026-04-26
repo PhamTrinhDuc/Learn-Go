@@ -3,10 +3,10 @@ package main
 import (
 	"context"
 	"fmt"
-	"learn-go/a2a_mcp/mcp-server/internal/database"
-	ollama "learn-go/a2a_mcp/pkg/ollama"
-	utils "learn-go/a2a_mcp/pkg/utils"
 	"log"
+	"mcp-server/internal/database"
+	ollama "mcp-server/internal/llm"
+	utils "mcp-server/internal/utils"
 )
 
 const testTenantID = "11111111-1111-1111-1111-111111111111" // acme-corp from init-db.sql

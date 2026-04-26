@@ -2,8 +2,8 @@ package database
 
 import (
 	"context"
-	ollama "learn-go/a2a_mcp/pkg/ollama"
-	utils "learn-go/a2a_mcp/pkg/utils"
+	ollama "mcp-server/internal/llm"
+	utils "mcp-server/internal/utils"
 	"sync"
 	"testing"
 

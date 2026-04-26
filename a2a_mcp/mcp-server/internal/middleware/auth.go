@@ -1,72 +1,44 @@
 package middleware
 
 import (
-	"encoding/json"
-	"learn-go/a2a_mcp/mcp-server/internal/auth"
-	"learn-go/a2a_mcp/mcp-server/internal/protocol"
+	"mcp-server/internal/auth"
 	"net/http"
+	"strings"
+
+	"github.com/gin-gonic/gin"
 )
 
 type AuthMiddle struct {
-	validator           *auth.JWTValidator
-	allowUnautheticated map[string]bool // cho phép các endpoint không cần auth
+	validator *auth.JWTValidator
 }
 
-// NewAuthMiddleware creates a new auth middleware
 func NewAuthMiddleware(validator *auth.JWTValidator) *AuthMiddle {
 	return &AuthMiddle{
 		validator: validator,
-		allowUnautheticated: map[string]bool{
-			protocol.MethodInitialize: true,
-		},
 	}
 }
 
-func (am *AuthMiddle) SendError(w http.ResponseWriter, id interface{}, code int, message string) {
-	w.Header().Set("Content-type", "application/json")
-	w.WriteHeader(http.StatusUnauthorized)
-
-	response := protocol.NewErrorResponse(id, code, message, nil)
-	json.NewEncoder(w).Encode(response)
-}
-
-// Handler wraps an HTTP handler with authentication
-func (am *AuthMiddle) Handler(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// 1. Get header
-		authHeader := r.Header.Get("Authorization")
-		// fmt.Println("auth token: ", authHeader)
+// Handler is the Gin-compatible auth middleware
+func (am *AuthMiddle) Handler() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		authHeader := c.GetHeader("Authorization")
 		if authHeader == "" {
-			am.SendError(w, nil, protocol.AuthenticationRequired, "Authorization header required")
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "Authorization header required"})
+			c.Abort()
 			return
 		}
 
-		// 2. Validation token
-		claims, err := am.validator.ValidateToken(authHeader)
+		token := strings.TrimPrefix(authHeader, "Bearer ")
+		claims, err := am.validator.ValidateToken(token)
 		if err != nil {
-			am.SendError(w, nil, protocol.AuthenticationRequired, "Invalid token: "+err.Error())
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid token: " + err.Error()})
+			c.Abort()
 			return
 		}
 
-		// 3. Add auth to conttext
-		ctx := auth.WithAuth(r.Context(), claims)
-		next.ServeHTTP(w, r.WithContext(ctx))
-	})
-}
-
-func (am *AuthMiddle) OptionalHandler(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		authHeader := r.Header.Get("Authorization")
-		if authHeader != "" {
-			claims, err := am.validator.ValidateToken(authHeader)
-			if err != nil {
-				am.SendError(w, nil, protocol.AuthenticationRequired, "Invalid token: "+err.Error())
-				return
-			}
-			ctx := auth.WithAuth(r.Context(), claims)
-			next.ServeHTTP(w, r.WithContext(ctx))
-			return
-		}
-		next.ServeHTTP(w, r)
-	})
+		// Update context with auth claims
+		ctx := auth.WithAuth(c.Request.Context(), claims)
+		c.Request = c.Request.WithContext(ctx)
+		c.Next()
+	}
 }

@@ -15,7 +15,7 @@ import (
 	"github.com/tmc/langchaingo/schema"
 	"github.com/tmc/langchaingo/textsplitter"
 
-	"learn-go/a2a_mcp/mcp-server/internal/database"
+	"mcp-server/internal/database"
 )
 
 func loadDocs(ctx context.Context, filePath string) ([]schema.Document, error) {

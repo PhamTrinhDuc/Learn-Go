@@ -2,9 +2,9 @@ package middleware
 
 import (
 	"context"
-	auth "learn-go/a2a_mcp/mcp-server/internal/auth"
-	my_redis "learn-go/a2a_mcp/mcp-server/internal/redis"
-	utils "learn-go/a2a_mcp/pkg/utils"
+	auth "mcp-server/internal/auth"
+	my_redis "mcp-server/internal/redis"
+	utils "mcp-server/internal/utils"
 	"net/http"
 	"net/http/httptest"
 	"testing"

@@ -4,8 +4,8 @@ import (
 	"context"
 	"fmt"
 
-	database "learn-go/a2a_mcp/mcp-server/internal/database"
-	"learn-go/a2a_mcp/pkg/ollama"
+	database "mcp-server/internal/database"
+	ollama "mcp-server/internal/llm"
 )
 
 func ingestToVDB(ctx context.Context, model *ollama.Client, db *database.DB, filePath string, tenantID string) error {

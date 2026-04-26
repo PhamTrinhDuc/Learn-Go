@@ -3,7 +3,7 @@ package redis
 import (
 	"testing"
 
-	utils "learn-go/a2a_mcp/pkg/utils"
+	utils "mcp-server/internal/utils"
 
 	"github.com/stretchr/testify/assert"
 )

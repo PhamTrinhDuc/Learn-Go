@@ -2,8 +2,8 @@ package index
 
 import (
 	"context"
-	database "learn-go/a2a_mcp/mcp-server/internal/database"
-	"learn-go/a2a_mcp/pkg/ollama"
+	database "mcp-server/internal/database"
+	ollama "mcp-server/internal/llm"
 	"testing"
 
 	"github.com/stretchr/testify/assert"

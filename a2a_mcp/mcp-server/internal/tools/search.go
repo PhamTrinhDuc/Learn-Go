@@ -2,41 +2,35 @@ package tools
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
-	"learn-go/a2a_mcp/mcp-server/internal/auth"
-	"learn-go/a2a_mcp/mcp-server/internal/database"
-	"learn-go/a2a_mcp/mcp-server/internal/protocol"
+	"mcp-server/internal/auth"
+	"mcp-server/internal/database"
+
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
 type SearchTool struct {
 	db database.Store
 }
 
-type SearchParams struct {
-	Query string `json:"query"`
-	Limit int    `json:"limit"`
-}
-
 func NewSearchTool(db database.Store) *SearchTool {
 	return &SearchTool{db: db}
 }
 
-// Definition returns the tool definition for MCP
-func (t *SearchTool) Definition() protocol.Tool {
-	return protocol.Tool{
-		Name:        "search documents",
-		Description: "Search documents by text query. Searches across title, content, and metadata fields.",
-		InputSchema: map[string]interface{}{
+func (t *SearchTool) Definition() *mcp.Tool {
+	return &mcp.Tool{
+		Name:        "search_documents",
+		Description: "Search documents by text query.",
+		InputSchema: map[string]any{
 			"type": "object",
-			"properties": map[string]interface{}{
-				"query": map[string]interface{}{
+			"properties": map[string]any{
+				"query": map[string]any{
 					"type":        "string",
 					"description": "the search query text",
 				},
-				"limit": map[string]interface{}{
+				"limit": map[string]any{
 					"type":        "number",
-					"description": "Maximum number of results to return (defaults: 10, max: 50)",
+					"description": "Maximum number of results to return",
 				},
 			},
 			"required": []string{"query"},
@@ -44,69 +38,38 @@ func (t *SearchTool) Definition() protocol.Tool {
 	}
 }
 
-// Execute performs the search operation
-func (t *SearchTool) Execute(ctx context.Context, args map[string]interface{}) (protocol.ToolCallResult, error) {
-	// Extract tenant ID from context
+type SearchArgs struct {
+	Query string  `json:"query"`
+	Limit float64 `json:"limit"`
+}
+
+func (t *SearchTool) Handler(ctx context.Context, req *mcp.CallToolRequest, args SearchArgs) (*mcp.CallToolResult, any, error) {
 	tenantID, err := auth.ExtractTenantID(ctx)
 	if err != nil {
-		return protocol.ToolCallResult{IsError: true}, fmt.Errorf("authentication required: %w", err)
+		res := &mcp.CallToolResult{IsError: true}
+		return res, mcp.TextContent{Text: fmt.Sprintf("authentication required: %v", err)}, nil
 	}
 
-	// Parse parameters
-	argsJSON, err := json.Marshal(args)
+	limit := int(args.Limit)
+	if limit <= 0 {
+		limit = 10
+	}
+
+	documents, err := t.db.SearchDocuments(ctx, tenantID, args.Query, limit)
 	if err != nil {
-		return protocol.ToolCallResult{IsError: true}, fmt.Errorf("invalid arguments: %w", err)
+		res := &mcp.CallToolResult{IsError: true}
+		return res, mcp.TextContent{Text: fmt.Sprintf("search failed: %v", err)}, nil
 	}
 
-	var params SearchParams
-	if err := json.Unmarshal(argsJSON, &params); err != nil {
-		return protocol.ToolCallResult{IsError: true}, fmt.Errorf("invalid arguments: %w", err)
-	}
-
-	// Validate parameters
-	if params.Query == "" {
-		return protocol.ToolCallResult{IsError: true}, fmt.Errorf("query is required")
-	}
-	if params.Limit <= 0 {
-		params.Limit = 10
-	}
-	if params.Limit > 100 {
-		params.Limit = 100
-	}
-
-	// Perform search
-	documents, err := t.db.SearchDocuments(ctx, tenantID, params.Query, params.Limit)
-	if err != nil {
-		return protocol.ToolCallResult{IsError: true}, fmt.Errorf("search failed: %w", err)
-	}
-
-	// Format results
 	var resultText string
 	if len(documents) == 0 {
-		resultText = fmt.Sprintf("No documents found matching query: %s", params.Query)
+		resultText = fmt.Sprintf("No documents found matching query: %s", args.Query)
 	} else {
-		resultText = fmt.Sprintf("Found %d document(s) matching query: %s\n\n", len(documents), params.Query)
+		resultText = fmt.Sprintf("Found %d document(s)\n", len(documents))
 		for i, doc := range documents {
-			resultText += fmt.Sprintf("Document %d:\n", i+1)
-			resultText += fmt.Sprintf("  ID: %s\n", doc.ID)
-			resultText += fmt.Sprintf("  Title: %s\n", doc.Title)
-			resultText += fmt.Sprintf("  Content Preview: %.200s...\n", doc.Content)
-			if doc.Metadata != nil {
-				metadataJSON, _ := json.Marshal(doc.Metadata)
-				resultText += fmt.Sprintf("  Metadata: %s\n", string(metadataJSON))
-			}
-			resultText += fmt.Sprintf("  Created: %s\n", doc.CreatedAt.Format("2006-01-02 15:04:05"))
-			resultText += "\n"
+			resultText += fmt.Sprintf("%d. %s\n", i+1, doc.Title)
 		}
 	}
 
-	return protocol.ToolCallResult{
-		Content: []protocol.ContentBlock{
-			{
-				Type: "text",
-				Text: resultText,
-			},
-		},
-		IsError: false,
-	}, nil
+	return &mcp.CallToolResult{}, mcp.TextContent{Text: resultText}, nil
 }
