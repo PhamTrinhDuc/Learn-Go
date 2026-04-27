@@ -1,9 +1,8 @@
 package auth
 
 import (
-	"context"
-	"crypto/rsa"
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
@@ -15,126 +14,89 @@ type ContextKey string
 const (
 	// context key for user ID
 	ContextKeyUserID ContextKey = "user_id"
-	// context key for authorization scopes
-	ContextKeyScopes ContextKey = "scopes"
+	// context key for user email
+	ContextKeyEmail ContextKey = "email"
+	// context key for user role
+	ContextKeyRole ContextKey = "role"
 )
 
-type JWTValidator struct {
-	publicKey *rsa.PublicKey
-	issuer    string
-	audience  string
-}
-
-// Cấu hình cho JWT
-type Config struct {
-	PublicKeyPEM string // RSA public key in PEM format
-	Issuer       string // Expected token issuer
-	Audience     string // Expected token audience
-}
-
-// Cấu trúc để JWTValidator parse token ra
-type Claims struct {
-	UserID string   `json: "user_id"`
-	Email  string   `json: "email,omitempty"`
-	Scopes []string `json: "scopes,omitempty"`
+// JWTClaims represents JWT token claims for HMAC-based tokens
+type JWTClaims struct {
+	UserID string `json:"user_id"`
+	Email  string `json:"email"`
+	Role   string `json:"role"`
 	jwt.RegisteredClaims
 }
 
-// Khởi tạo new JWT Validator (constructor)
-func NewJWTValidator(cfg Config) (*JWTValidator, error) {
-	// 1. Parse RSA Public key from PEM
-	publicKey, err := jwt.ParseRSAPublicKeyFromPEM([]byte(cfg.PublicKeyPEM))
-	if err != nil {
-		return nil, fmt.Errorf("failed to parse Publickey in format PEM")
+// ValidateToken validates a JWT token string and returns claims
+// Uses HMAC-SHA256 signing method
+func ValidateToken(tokenString string) (*JWTClaims, error) {
+	// Get JWT secret from environment
+	secret := os.Getenv("JWT_SECRET")
+	if secret == "" {
+		secret = "your-secret-key-change-this-in-production"
 	}
-	// 2. Return address JWTValidator for pointer
-	return &JWTValidator{
-		publicKey: publicKey,
-		issuer:    cfg.Issuer,
-		audience:  cfg.Audience,
-	}, nil
-}
 
-// ValidateToken validates JWT token and return claims
-func (v *JWTValidator) ValidateToken(tokenString string) (*Claims, error) {
-	// 1. Remove Bearer prefix and extra spaces robustly
-	for strings.HasPrefix(strings.ToLower(tokenString), "bearer ") {
-		tokenString = strings.TrimSpace(tokenString[7:])
-	}
-	tokenString = strings.TrimSpace(tokenString)
-	// 2. Parse and validate token
-	token, err := jwt.ParseWithClaims(
-		tokenString, // token để parse
-		&Claims{},   // khuôn để dổ dữ liệu vào (pointer để có thể ghi dữ liệu vào)
-		func(token *jwt.Token) (interface{}, error) { // callback để cấp key verify
-			if _, ok := token.Method.(*jwt.SigningMethodRSA); !ok { // token.Method có kiểu jwt.SigningMethod - 1 interface. Go chưa biết là RSA hay HMAC. Dùng .(type) để hỏi: token.Method có phải là *jwt.SigningMethodRSA không
-				return nil, fmt.Errorf("unexprected signing method: %v", token.Header["alg"])
-			}
-			return v.publicKey, nil
-		})
-	if err != nil { // không phải kiểu *jwt.SigningMethodRSA
+	// Parse and validate token
+	claims := &JWTClaims{}
+	token, err := jwt.ParseWithClaims(tokenString, claims, func(token *jwt.Token) (interface{}, error) {
+		// Verify signing method is HMAC
+		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
+			return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
+		}
+		return []byte(secret), nil
+	})
+
+	if err != nil {
 		return nil, fmt.Errorf("failed to parse token: %w", err)
 	}
-	// có phải Claims có các trường như đã định nghĩa không
-	claims, ok := token.Claims.(*Claims)
-	if !ok || !token.Valid {
-		return nil, fmt.Errorf("Invalid token claims")
-	}
-	// 3. Validate Issuer and Audience
-	if claims.Issuer != v.issuer {
-		return nil, fmt.Errorf("Invalid issuer: expected %s, got %s", v.issuer, claims.Issuer)
-	}
-	validAudience := false
-	for _, aud := range claims.Audience {
-		if aud == v.audience {
-			validAudience = true
-			break
-		}
-	}
-	if !validAudience {
-		return nil, fmt.Errorf("Invalid audience")
-	}
 
-	// 4. Validate expriration
-	if claims.ExpiresAt != nil && claims.ExpiresAt.Before(time.Now()) {
-		return nil, fmt.Errorf("token expired")
+	if !token.Valid {
+		return nil, fmt.Errorf("invalid token")
 	}
 
 	return claims, nil
-
 }
 
-func WithAuth(ctx context.Context, claims *Claims) context.Context {
-	ctx = context.WithValue(ctx, ContextKeyUserID, claims.UserID)
-	ctx = context.WithValue(ctx, ContextKeyScopes, claims.Scopes)
-	return ctx
-}
-
-func ExtractUserID(ctx context.Context) (string, error) {
-	userID, oke := ctx.Value(ContextKeyUserID).(string)
-	if !oke || userID == "" {
-		return "", fmt.Errorf("user_id not found in context")
+// ExtractTokenFromHeader extracts JWT token from Authorization header
+// Expected format: "Bearer <token>"
+func ExtractTokenFromHeader(authHeader string) (string, error) {
+	if authHeader == "" {
+		return "", fmt.Errorf("authorization header required")
 	}
-	return userID, nil
-}
 
-func ExtractScopes(ctx context.Context) ([]string, error) {
-	scopes, oke := ctx.Value(ContextKeyScopes).([]string)
-	if !oke || len(scopes) == 0 {
-		return []string{}, fmt.Errorf("scopes not found in context")
+	parts := strings.SplitN(authHeader, " ", 2)
+	if len(parts) != 2 || parts[0] != "Bearer" {
+		return "", fmt.Errorf("invalid authorization header format, expected: Bearer <token>")
 	}
-	return scopes, nil
+
+	return parts[1], nil
 }
 
-func hasScope(ctx context.Context, requiredScope string) bool {
-	scopes, err := ExtractScopes(ctx)
+// GenerateToken generates a new JWT token with the given claims
+func GenerateToken(userID, email, role string, expirationHours int) (string, error) {
+	secret := os.Getenv("JWT_SECRET")
+	if secret == "" {
+		secret = "your-secret-key-change-this-in-production"
+	}
+
+	// Create claims
+	claims := &JWTClaims{
+		UserID: userID,
+		Email:  email,
+		Role:   role,
+		RegisteredClaims: jwt.RegisteredClaims{
+			ExpiresAt: jwt.NewNumericDate(time.Now().Add(time.Duration(expirationHours) * time.Hour)),
+			IssuedAt:  jwt.NewNumericDate(time.Now()),
+		},
+	}
+
+	// Create token
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+	tokenString, err := token.SignedString([]byte(secret))
 	if err != nil {
-		return false
+		return "", fmt.Errorf("failed to sign token: %w", err)
 	}
-	for _, scope := range scopes {
-		if scope == requiredScope {
-			return true
-		}
-	}
-	return false
+
+	return tokenString, nil
 }

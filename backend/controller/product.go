@@ -27,8 +27,8 @@ func NewProductController(useCase *usecase.ProductUseCase) *ProductController {
 func (c *ProductController) List(ctx *gin.Context) {
 	search := ctx.Query("search")
 	category := ctx.Query("category")
-	page := getQueryInt(ctx, "page", 1)
-	limit := getQueryInt(ctx, "limit", 10)
+	page := utils.GetQueryInt(ctx, "page", 1)
+	limit := utils.GetQueryInt(ctx, "limit", 10)
 
 	var minPrice, maxPrice *float64
 	if mp := ctx.Query("min_price"); mp != "" {

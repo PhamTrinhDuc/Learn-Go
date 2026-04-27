@@ -8,18 +8,14 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-type AuthMiddleware struct {
-	validator *auth.JWTValidator
+// AuthMiddleware provides JWT authentication
+type AuthMiddleware struct{}
+
+func NewAuthMiddleware() *AuthMiddleware {
+	return &AuthMiddleware{}
 }
 
-// NewAuthMiddleware creates a new auth middleware
-func NewAuthMiddleware(validator *auth.JWTValidator) *AuthMiddleware {
-	return &AuthMiddleware{
-		validator: validator,
-	}
-}
-
-// Handler validates the JWT token and adds claims to the context
+// Handler validates JWT token and adds claims to context
 func (m *AuthMiddleware) Handler() gin.HandlerFunc {
 	return func(ctx *gin.Context) {
 		authHeader := ctx.GetHeader("Authorization")
@@ -29,33 +25,79 @@ func (m *AuthMiddleware) Handler() gin.HandlerFunc {
 			return
 		}
 
-		// Validation token
-		claims, err := m.validator.ValidateToken(authHeader)
+		// Extract token from "Bearer <token>"
+		tokenString, err := auth.ExtractTokenFromHeader(authHeader)
+		if err != nil {
+			ctx.JSON(http.StatusUnauthorized, utils.HTTPResponse{Error: err.Error()})
+			ctx.Abort()
+			return
+		}
+
+		// Validate token
+		claims, err := auth.ValidateToken(tokenString)
 		if err != nil {
 			ctx.JSON(http.StatusUnauthorized, utils.HTTPResponse{Error: "Invalid token: " + err.Error()})
 			ctx.Abort()
 			return
 		}
 
-		// Add auth to context
+		// Add claims to context
 		ctx.Set(string(auth.ContextKeyUserID), claims.UserID)
-		ctx.Set(string(auth.ContextKeyScopes), claims.Scopes)
+		ctx.Set(string(auth.ContextKeyEmail), claims.Email)
+		ctx.Set(string(auth.ContextKeyRole), claims.Role)
 
 		ctx.Next()
 	}
 }
 
-// OptionalHandler validates the token if present, but doesn't block if missing
+// OptionalHandler validates token if present, but doesn't block if missing
 func (m *AuthMiddleware) OptionalHandler() gin.HandlerFunc {
 	return func(ctx *gin.Context) {
 		authHeader := ctx.GetHeader("Authorization")
 		if authHeader != "" {
-			claims, err := m.validator.ValidateToken(authHeader)
+			// Try to extract and validate token
+			tokenString, err := auth.ExtractTokenFromHeader(authHeader)
 			if err == nil {
-				ctx.Set(string(auth.ContextKeyUserID), claims.UserID)
-				ctx.Set(string(auth.ContextKeyScopes), claims.Scopes)
+				// Try to validate token
+				claims, err := auth.ValidateToken(tokenString)
+				if err == nil {
+					// Token is valid, add to context
+					ctx.Set(string(auth.ContextKeyUserID), claims.UserID)
+					ctx.Set(string(auth.ContextKeyEmail), claims.Email)
+					ctx.Set(string(auth.ContextKeyRole), claims.Role)
+				}
+				// If validation fails, continue without aborting (it's optional)
 			}
 		}
+		ctx.Next()
+	}
+}
+
+// RequireRole checks if user has required role
+func (m *AuthMiddleware) RequireRole(requiredRoles ...string) gin.HandlerFunc {
+	return func(ctx *gin.Context) {
+		roleVal, exists := ctx.Get(string(auth.ContextKeyRole))
+		if !exists {
+			ctx.JSON(http.StatusUnauthorized, utils.HTTPResponse{Error: "User role not found"})
+			ctx.Abort()
+			return
+		}
+
+		userRole := roleVal.(string)
+		hasRole := false
+		for _, role := range requiredRoles {
+			if userRole == role {
+				hasRole = true
+				break
+			}
+		}
+
+		if !hasRole {
+			ctx.JSON(http.StatusForbidden, utils.HTTPResponse{Error: "Insufficient permissions"})
+			ctx.Abort()
+			return
+		}
+
 		ctx.Next()
 	}
 }
