@@ -3,16 +3,17 @@ package domain
 import (
 	"backend/internal/utils"
 	"context"
+	"time"
 )
 
 type Stylist struct {
-	ID        string `json:"id" db:"id"`
-	BranchID  string `json:"branch_id" db:"branch_id"`
-	Name      string `json:"name" db:"name"`
-	Phone     string `json:"phone" db:"phone"`
-	IsActive  bool   `json:"is_active" db:"is_active"`
-	CreatedAt string `json:"created_at" db:"created_at"`
-	UpdatedAt string `json:"updated_at" db:"updated_at"`
+	ID        string    `json:"id" db:"id"`
+	BranchID  string    `json:"branch_id" db:"branch_id"`
+	Name      string    `json:"name" db:"name"`
+	Phone     string    `json:"phone" db:"phone"`
+	IsActive  bool      `json:"is_active" db:"is_active"`
+	CreatedAt time.Time `json:"created_at" db:"created_at"`
+	UpdatedAt time.Time `json:"updated_at" db:"updated_at"`
 }
 
 type StylistRepository interface {

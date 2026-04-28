@@ -26,7 +26,7 @@ var configModel = ollama.Config{
 func TestIngestToVDB(t *testing.T) {
 
 	ctx := context.Background()
-	tenantID := "11111111-1111-1111-1111-111111111111"
+	// tenantID := "11111111-1111-1111-1111-111111111111"
 	filePath := "../../../data/VTI_Quy định_Quy định điền thông tin trên hệ thống VMS_v2.0.pdf"
 
 	// 1. Init database
@@ -35,14 +35,14 @@ func TestIngestToVDB(t *testing.T) {
 	// 2. Init client Ollama
 	model, err := ollama.NewClient(configModel)
 
-	err = ingestToVDB(ctx, model, db, filePath, tenantID)
+	err = ingestToVDB(ctx, model, db, filePath)
 	assert.NoError(t, err)
 }
 
 func TestIngestBatchingToVDB(t *testing.T) {
 
 	ctx := context.Background()
-	tenantID := "11111111-1111-1111-1111-111111111111"
+	// tenantID := "11111111-1111-1111-1111-111111111111"
 	filePaths := []string{
 		"../../../data/VTI_Quy định thưởng đề xuất IP Kaizen-2019_V1.0.pdf",
 		"../../../data/VTI_Quy định_Quy định điền thông tin trên hệ thống VMS_v2.0.pdf",
@@ -56,6 +56,6 @@ func TestIngestBatchingToVDB(t *testing.T) {
 	// 2. Init client Ollama
 	model, err := ollama.NewClient(configModel)
 
-	err = ingestBatchingToVDB(ctx, model, db, filePaths, tenantID)
+	err = ingestBatchingToVDB(ctx, model, db, filePaths)
 	assert.NoError(t, err)
 }

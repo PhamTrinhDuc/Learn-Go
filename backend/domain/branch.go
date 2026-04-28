@@ -3,17 +3,18 @@ package domain
 import (
 	"backend/internal/utils"
 	"context"
+	"time"
 )
 
 type Branch struct {
-	ID           string `json:"id" db:"id"`
-	Name         string `json:"name" db:"name"`
-	Address      string `json:"address" db:"address"`
-	Phone        string `json:"phone" db:"phone"`
-	OpeningHours string `json:"opening_hours" db:"opening_hours"`
-	IsActive     bool   `json:"is_active" db:"is_active"`
-	CreatedAt    string `json:"created_at" db:"created_at"`
-	UpdatedAt    string `json:"updated_at" db:"updated_at"`
+	ID           string    `json:"id" db:"id"`
+	Name         string    `json:"name" db:"name"`
+	Address      string    `json:"address" db:"address"`
+	Phone        string    `json:"phone" db:"phone"`
+	OpeningHours string    `json:"opening_hours" db:"opening_hours"`
+	IsActive     bool      `json:"is_active" db:"is_active"`
+	CreatedAt    time.Time `json:"created_at" db:"created_at"`
+	UpdatedAt    time.Time `json:"updated_at" db:"updated_at"`
 }
 
 type BranchRepository interface {

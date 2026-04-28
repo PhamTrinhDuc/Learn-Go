@@ -9,8 +9,6 @@ import (
 	utils "mcp-server/internal/utils"
 )
 
-const testTenantID = "11111111-1111-1111-1111-111111111111" // acme-corp from init-db.sql
-
 func getTestDBConfig() database.DBConfig {
 	return database.DBConfig{
 		Host:     utils.GetEnvString("DB_HOST", "localhost"),
@@ -75,7 +73,7 @@ func TestPostgres(query string) {
 	// 		Embedding:    embedding[0],
 	// 	})
 
-	response, err := db.FullTextSearch(ctx, testTenantID, query, 5)
+	response, err := db.FullTextSearch(ctx, query, 5)
 
 	if err != nil {
 		fmt.Println("failed to perform vector search: %w", err)

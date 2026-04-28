@@ -3,6 +3,7 @@ package domain
 import (
 	"backend/internal/utils"
 	"context"
+	"time"
 
 	"github.com/google/uuid"
 )
@@ -25,8 +26,8 @@ type Product struct {
 	UsageType                 UsageType `json:"usage_type" db:"usage_type"`
 	LowStockThresholdRetail   int       `json:"low_stock_threshold_retail" db:"low_stock_threshold_retail"`
 	LowStockThresholdInternal int       `json:"low_stock_threshold_internal" db:"low_stock_threshold_internal"`
-	CreatedAt                 string    `json:"created_at" db:"created_at"`
-	UpdatedAt                 string    `json:"updated_at" db:"updated_at"`
+	CreatedAt                 time.Time    `json:"created_at" db:"created_at"`
+	UpdatedAt                 time.Time    `json:"updated_at" db:"updated_at"`
 }
 
 type ProductRepo interface {

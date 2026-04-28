@@ -3,42 +3,100 @@ package middleware
 import (
 	"mcp-server/internal/auth"
 	"net/http"
-	"strings"
 
 	"github.com/gin-gonic/gin"
 )
 
-type AuthMiddle struct {
-	validator *auth.JWTValidator
+// AuthMiddleware provides JWT authentication
+type AuthMiddleware struct{}
+
+func NewAuthMiddleware() *AuthMiddleware {
+	return &AuthMiddleware{}
 }
 
-func NewAuthMiddleware(validator *auth.JWTValidator) *AuthMiddle {
-	return &AuthMiddle{
-		validator: validator,
+// Handler validates JWT token and adds claims to context
+func (m *AuthMiddleware) Handler() gin.HandlerFunc {
+	return func(ctx *gin.Context) {
+		authHeader := ctx.GetHeader("Authorization")
+		if authHeader == "" {
+			ctx.JSON(http.StatusUnauthorized, gin.H{"error": "Authorization header required"})
+			ctx.Abort()
+			return
+		}
+
+		// Extract token from "Bearer <token>"
+		tokenString, err := auth.ExtractTokenFromHeader(authHeader)
+		if err != nil {
+			ctx.JSON(http.StatusUnauthorized, gin.H{"error": err.Error()})
+			ctx.Abort()
+			return
+		}
+
+		// Validate token
+		claims, err := auth.ValidateToken(tokenString)
+		if err != nil {
+			ctx.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid token: " + err.Error()})
+			ctx.Abort()
+			return
+		}
+
+		// Add claims to context
+		ctx.Set(string(auth.ContextKeyUserID), claims.UserID)
+		ctx.Set(string(auth.ContextKeyEmail), claims.Email)
+		ctx.Set(string(auth.ContextKeyRole), claims.Role)
+
+		ctx.Next()
 	}
 }
 
-// Handler is the Gin-compatible auth middleware
-func (am *AuthMiddle) Handler() gin.HandlerFunc {
-	return func(c *gin.Context) {
-		authHeader := c.GetHeader("Authorization")
-		if authHeader == "" {
-			c.JSON(http.StatusUnauthorized, gin.H{"error": "Authorization header required"})
-			c.Abort()
+// OptionalHandler validates token if present, but doesn't block if missing
+func (m *AuthMiddleware) OptionalHandler() gin.HandlerFunc {
+	return func(ctx *gin.Context) {
+		authHeader := ctx.GetHeader("Authorization")
+		if authHeader != "" {
+			// Try to extract and validate token
+			tokenString, err := auth.ExtractTokenFromHeader(authHeader)
+			if err == nil {
+				// Try to validate token
+				claims, err := auth.ValidateToken(tokenString)
+				if err == nil {
+					// Token is valid, add to context
+					ctx.Set(string(auth.ContextKeyUserID), claims.UserID)
+					ctx.Set(string(auth.ContextKeyEmail), claims.Email)
+					ctx.Set(string(auth.ContextKeyRole), claims.Role)
+				}
+				// If validation fails, continue without aborting (it's optional)
+			}
+		}
+		ctx.Next()
+	}
+}
+
+// RequireRole checks if user has required role
+func (m *AuthMiddleware) RequireRole(requiredRoles ...string) gin.HandlerFunc {
+	return func(ctx *gin.Context) {
+		roleVal, exists := ctx.Get(string(auth.ContextKeyRole))
+		if !exists {
+			ctx.JSON(http.StatusUnauthorized, gin.H{"error": "User role not found"})
+			ctx.Abort()
 			return
 		}
 
-		token := strings.TrimPrefix(authHeader, "Bearer ")
-		claims, err := am.validator.ValidateToken(token)
-		if err != nil {
-			c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid token: " + err.Error()})
-			c.Abort()
+		userRole := roleVal.(string)
+		hasRole := false
+		for _, role := range requiredRoles {
+			if userRole == role {
+				hasRole = true
+				break
+			}
+		}
+
+		if !hasRole {
+			ctx.JSON(http.StatusForbidden, gin.H{"error": "Insufficient permissions"})
+			ctx.Abort()
 			return
 		}
 
-		// Update context with auth claims
-		ctx := auth.WithAuth(c.Request.Context(), claims)
-		c.Request = c.Request.WithContext(ctx)
-		c.Next()
+		ctx.Next()
 	}
 }

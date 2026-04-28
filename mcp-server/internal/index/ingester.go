@@ -8,13 +8,13 @@ import (
 	ollama "mcp-server/internal/llm"
 )
 
-func ingestToVDB(ctx context.Context, model *ollama.Client, db *database.DB, filePath string, tenantID string) error {
+func ingestToVDB(ctx context.Context, model *ollama.Client, db *database.DB, filePath string) error {
 	docs, err := loadDocs(ctx, filePath)
 	if err != nil {
 		return fmt.Errorf("failed to load documents: %w", err)
 	}
 
-	docFormatted, err := convertToDocumentFormat(docs, tenantID)
+	docFormatted, err := convertToDocumentFormat(docs)
 	if err != nil {
 		return fmt.Errorf("failed to convert document: %w", err)
 	}
@@ -47,14 +47,14 @@ func ingestToVDB(ctx context.Context, model *ollama.Client, db *database.DB, fil
 	}
 
 	// Dùng InsertBatchingDocument vì docFormatted là một slice (danh sách)
-	err = db.InsertBatchingDocument(ctx, tenantID, docFormatted, 6)
+	err = db.InsertDocuments(ctx, docFormatted)
 	if err != nil {
 		return fmt.Errorf("failed to insert docs: %w", err)
 	}
 	return nil
 }
 
-func ingestBatchingToVDB(ctx context.Context, model *ollama.Client, db *database.DB, filePaths []string, tenantID string) error {
+func ingestBatchingToVDB(ctx context.Context, model *ollama.Client, db *database.DB, filePaths []string) error {
 	// 1. Load và Split song song (Tận dụng goroutines đã viết ở spliiter.go)
 	docs, err := loadBatchDocs(ctx, filePaths)
 	if err != nil {
@@ -62,7 +62,7 @@ func ingestBatchingToVDB(ctx context.Context, model *ollama.Client, db *database
 	}
 
 	// 2. Format dữ liệu
-	docFormatted, err := convertToDocumentFormat(docs, tenantID)
+	docFormatted, err := convertToDocumentFormat(docs)
 	if err != nil {
 		return fmt.Errorf("failed to convert documents: %w", err)
 	}
@@ -95,7 +95,7 @@ func ingestBatchingToVDB(ctx context.Context, model *ollama.Client, db *database
 	}
 
 	// 4. Insert một cú duy nhất vào DB (Batching)
-	err = db.InsertBatchingDocument(ctx, tenantID, docFormatted, 6)
+	err = db.InsertDocuments(ctx, docFormatted)
 	if err != nil {
 		return fmt.Errorf("failed to insert batch to database: %w", err)
 	}

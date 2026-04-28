@@ -1,328 +1,197 @@
 package middleware
 
 import (
-	"crypto/rand"
-	"crypto/rsa"
-	"crypto/x509"
-	"encoding/json"
-	"encoding/pem"
 	"mcp-server/internal/auth"
-	"mcp-server/internal/protocol"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"testing"
-	"time"
 
+	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-func setupTestAuth(t *testing.T) (*auth.JWTValidator, *rsa.PrivateKey, string) {
-	// 1. Generate private key
-	privateKey, err := rsa.GenerateKey(rand.Reader, 2048)
-	require.NoError(t, err)
-	// 2. Generate public key
-	publicKeyBytes, err := x509.MarshalPKIXPublicKey(&privateKey.PublicKey)
-	require.NoError(t, err)
-	// 3. Generate publicKey format PEM
-	publickeyPEM := string(pem.EncodeToMemory(&pem.Block{
-		Type:  "PUBLIC_KEY",
-		Bytes: publicKeyBytes,
-	}))
+func TestAuthMiddleware_Handler(t *testing.T) {
+	os.Setenv("JWT_SECRET", "test-secret")
+	defer os.Unsetenv("JWT_SECRET")
 
-	// 4. Create authValidator
-	validator, err := auth.NewJWTValidator(
-		auth.Config{
-			PublicKeyPEM: publickeyPEM,
-			Issuer:       "mcp-server-demo",
-			Audience:     "mcp-server",
-		},
-	)
-	require.NoError(t, err)
-	return validator, privateKey, publickeyPEM
-}
+	gin.SetMode(gin.TestMode)
 
-func TestNewMiddleware(t *testing.T) {
-	validator, _, _ := setupTestAuth(t)
-	middleware := NewAuthMiddleware(validator)
+	t.Run("Valid Token", func(t *testing.T) {
+		r := gin.New()
+		middleware := NewAuthMiddleware()
+		r.Use(middleware.Handler())
 
-	assert.NotNil(t, middleware)
-	assert.NotNil(t, middleware.validator)
-	assert.NotNil(t, middleware.allowUnautheticated)
-	assert.True(t, middleware.allowUnautheticated[protocol.MethodInitialize])
-}
+		r.GET("/test", func(c *gin.Context) {
+			userID, _ := c.Get(string(auth.ContextKeyUserID))
+			assert.Equal(t, "user123", userID)
+			c.String(http.StatusOK, "success")
+		})
 
-func TestMiddleware_Handle_ValidToken(t *testing.T) {
-	validator, privateKey, _ := setupTestAuth(t)
-	token, err := auth.GenerateDemoToken(
-		"tenant_id-123",
-		"user_id-123",
-		[]string{"admin"},
-		privateKey,
-	)
-	require.NoError(t, err)
-	middleware := NewAuthMiddleware(validator)
-
-	// Create test handler
-	handleCalled := false
-	testHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		handleCalled = true
-
-		tenantID, err := auth.ExtractTenantID(r.Context())
+		token, err := auth.GenerateTokenWithPrivateKey("user123", "test@test.com", "admin")
 		require.NoError(t, err)
-		require.Equal(t, "tenant_id-123", tenantID)
 
-		userID, err := auth.ExtractUserID(r.Context())
+		req, _ := http.NewRequest("GET", "/test", nil)
+		req.Header.Set("Authorization", "Bearer "+token)
+		w := httptest.NewRecorder()
+
+		r.ServeHTTP(w, req)
+
+		assert.Equal(t, http.StatusOK, w.Code)
+		assert.Equal(t, "success", w.Body.String())
+	})
+
+	t.Run("Missing Token", func(t *testing.T) {
+		r := gin.New()
+		middleware := NewAuthMiddleware()
+		r.Use(middleware.Handler())
+
+		r.GET("/test", func(c *gin.Context) {
+			c.String(http.StatusOK, "success")
+		})
+
+		req, _ := http.NewRequest("GET", "/test", nil)
+		w := httptest.NewRecorder()
+
+		r.ServeHTTP(w, req)
+
+		assert.Equal(t, http.StatusUnauthorized, w.Code)
+	})
+
+	t.Run("Invalid Token", func(t *testing.T) {
+		r := gin.New()
+		middleware := NewAuthMiddleware()
+		r.Use(middleware.Handler())
+
+		r.GET("/test", func(c *gin.Context) {
+			c.String(http.StatusOK, "success")
+		})
+
+		req, _ := http.NewRequest("GET", "/test", nil)
+		req.Header.Set("Authorization", "Bearer invalid-token")
+		w := httptest.NewRecorder()
+
+		r.ServeHTTP(w, req)
+
+		assert.Equal(t, http.StatusUnauthorized, w.Code)
+	})
+}
+
+func TestAuthMiddleware_OptionalHandler(t *testing.T) {
+	os.Setenv("JWT_SECRET", "test-secret")
+	defer os.Unsetenv("JWT_SECRET")
+
+	gin.SetMode(gin.TestMode)
+
+	t.Run("Valid Token - Passes Claims", func(t *testing.T) {
+		r := gin.New()
+		middleware := NewAuthMiddleware()
+		r.Use(middleware.OptionalHandler())
+
+		r.GET("/test", func(c *gin.Context) {
+			userID, exists := c.Get(string(auth.ContextKeyUserID))
+			assert.True(t, exists)
+			assert.Equal(t, "user123", userID)
+			c.String(http.StatusOK, "success")
+		})
+
+		token, err := auth.GenerateTokenWithPrivateKey("user123", "test@test.com", "admin")
 		require.NoError(t, err)
-		require.Equal(t, "user_id-123", userID)
 
-		w.WriteHeader(http.StatusOK)
+		req, _ := http.NewRequest("GET", "/test", nil)
+		req.Header.Set("Authorization", "Bearer "+token)
+		w := httptest.NewRecorder()
+
+		r.ServeHTTP(w, req)
+
+		assert.Equal(t, http.StatusOK, w.Code)
 	})
 
-	// create request and  object store response
-	req := httptest.NewRequest("POST", "/mcp", nil)
-	req.Header.Set("Authorization", "Bearer "+token)
-	rr := httptest.NewRecorder() // lưu trữ dữ liệu response vào đây thay cho client/trình duyệt của client
+	t.Run("Missing Token - Proceeds Without Claims", func(t *testing.T) {
+		r := gin.New()
+		middleware := NewAuthMiddleware()
+		r.Use(middleware.OptionalHandler())
 
-	// Execute
-	handler := middleware.Handler(testHandler)
-	handler.ServeHTTP(rr, req)
+		r.GET("/test", func(c *gin.Context) {
+			_, exists := c.Get(string(auth.ContextKeyUserID))
+			assert.False(t, exists)
+			c.String(http.StatusOK, "success")
+		})
 
-	require.Equal(t, handleCalled, true)
-	require.Equal(t, http.StatusOK, rr.Code)
+		req, _ := http.NewRequest("GET", "/test", nil)
+		w := httptest.NewRecorder()
+
+		r.ServeHTTP(w, req)
+
+		assert.Equal(t, http.StatusOK, w.Code)
+	})
 }
 
-func TestMiddleware_Handle_MissingToken(t *testing.T) {
-	validator, _, _ := setupTestAuth(t)
-	middleware := NewAuthMiddleware(validator)
-	testHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		t.Fatal("Handler should not be called missing token")
+func TestAuthMiddleware_RequireRole(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	t.Run("Has Required Role", func(t *testing.T) {
+		r := gin.New()
+		middleware := NewAuthMiddleware()
+
+		// Mock role in context
+		r.Use(func(c *gin.Context) {
+			c.Set(string(auth.ContextKeyRole), "admin")
+			c.Next()
+		})
+		r.Use(middleware.RequireRole("admin"))
+
+		r.GET("/test", func(c *gin.Context) {
+			c.String(http.StatusOK, "success")
+		})
+
+		req, _ := http.NewRequest("GET", "/test", nil)
+		w := httptest.NewRecorder()
+
+		r.ServeHTTP(w, req)
+
+		assert.Equal(t, http.StatusOK, w.Code)
 	})
 
-	// Create request and store response
-	req := httptest.NewRequest("POST", "/mcp", nil)
-	rr := httptest.NewRecorder()
+	t.Run("Insufficient Role", func(t *testing.T) {
+		r := gin.New()
+		middleware := NewAuthMiddleware()
 
-	// Execute
-	handler := middleware.Handler(testHandler)
-	handler.ServeHTTP(rr, req)
+		// Mock role in context
+		r.Use(func(c *gin.Context) {
+			c.Set(string(auth.ContextKeyRole), "user")
+			c.Next()
+		})
+		r.Use(middleware.RequireRole("admin"))
 
-	// Verify err code
-	require.Equal(t, http.StatusUnauthorized, rr.Code)
+		r.GET("/test", func(c *gin.Context) {
+			c.String(http.StatusOK, "success")
+		})
 
-	var response protocol.Response
-	err := json.NewDecoder(rr.Body).Decode(&response)
-	require.NoError(t, err)
-	assert.NotNil(t, response.Error)
-	assert.NotNil(t, protocol.AuthenticationRequired, response.Error.Code)
-	assert.Contains(t, response.Error.Message, "Authorization header required")
-}
+		req, _ := http.NewRequest("GET", "/test", nil)
+		w := httptest.NewRecorder()
 
-func TestMiddleware_Handle_InValidToken(t *testing.T) {
-	validator, _, _ := setupTestAuth(t)
-	middleware := NewAuthMiddleware(validator)
+		r.ServeHTTP(w, req)
 
-	testHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		t.Fatal("Handler should not be called invalid token")
+		assert.Equal(t, http.StatusForbidden, w.Code)
 	})
 
-	// create request and store response
-	req := httptest.NewRequest("POST", "/mcp", nil)
-	req.Header.Set("Authorization", "Invalid token")
-	rr := httptest.NewRecorder()
+	t.Run("Missing Role", func(t *testing.T) {
+		r := gin.New()
+		middleware := NewAuthMiddleware()
 
-	// Execute
-	hanlder := middleware.Handler(testHandler)
-	hanlder.ServeHTTP(rr, req)
+		r.Use(middleware.RequireRole("admin"))
 
-	// Verify err response
-	require.Equal(t, http.StatusUnauthorized, rr.Code)
+		r.GET("/test", func(c *gin.Context) {
+			c.String(http.StatusOK, "success")
+		})
 
-	var response protocol.Response
+		req, _ := http.NewRequest("GET", "/test", nil)
+		w := httptest.NewRecorder()
 
-	err := json.NewDecoder(rr.Body).Decode(&response)
-	require.NoError(t, err)
-	assert.NotNil(t, response.Error)
-	assert.Equal(t, protocol.AuthenticationRequired, response.Error.Code)
-	assert.Contains(t, response.Error.Message, "Invalid token")
-}
+		r.ServeHTTP(w, req)
 
-func TestMiddleware_Handle_ExpiredToken(t *testing.T) {
-	validator, privateKey, _ := setupTestAuth(t)
-	token, err := auth.GenerateDemoTokenWithExpiry(
-		"tenant_id-123",
-		"user_id-123",
-		[]string{"admin"},
-		privateKey,
-		-time.Hour,
-	)
-	require.NoError(t, err)
-	middleware := NewAuthMiddleware(validator)
-
-	// Create test handler
-	testHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		t.Fatal("Handler should not be called expired token")
+		assert.Equal(t, http.StatusUnauthorized, w.Code)
 	})
-
-	// create request and  object store response
-	req := httptest.NewRequest("POST", "/mcp", nil)
-	req.Header.Set("Authorization", "Bearer"+token)
-	rr := httptest.NewRecorder() // lưu trữ dữ liệu response vào đây thay cho client/trình duyệt của client
-
-	// Execute
-	hanlder := middleware.Handler(testHandler)
-	hanlder.ServeHTTP(rr, req)
-
-	// Verify err response
-	require.Equal(t, http.StatusUnauthorized, rr.Code)
-
-	var response protocol.Response
-
-	errRes := json.NewDecoder(rr.Body).Decode(&response)
-	require.NoError(t, errRes)
-	assert.NotNil(t, response.Error)
-	assert.Equal(t, protocol.AuthenticationRequired, response.Error.Code)
-	assert.Contains(t, response.Error.Message, "failed to parse token") // failed in JWTValidator.ValidateToken
-}
-
-func TestMiddleware_OptionHandle_ValidToken(t *testing.T) {
-	validator, privateKey, _ := setupTestAuth(t)
-	token, err := auth.GenerateDemoToken(
-		"tenant_id-123",
-		"user_id-123",
-		[]string{"admin"},
-		privateKey,
-	)
-	require.NoError(t, err)
-	middleware := NewAuthMiddleware(validator)
-
-	// Create test handler
-	handleCalled := false
-	testHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		handleCalled = true
-
-		tenantID, err := auth.ExtractTenantID(r.Context())
-		require.NoError(t, err)
-		require.Equal(t, "tenant_id-123", tenantID)
-
-		userID, err := auth.ExtractUserID(r.Context())
-		require.NoError(t, err)
-		require.Equal(t, "user_id-123", userID)
-
-		w.WriteHeader(http.StatusOK)
-	})
-
-	// create request and  object store response
-	req := httptest.NewRequest("POST", "/mcp", nil)
-	req.Header.Set("Authorization", "Bearer "+token)
-	rr := httptest.NewRecorder() // lưu trữ dữ liệu response vào đây thay cho client/trình duyệt của client
-
-	// Execute
-	handler := middleware.OptionalHandler(testHandler)
-	handler.ServeHTTP(rr, req)
-
-	require.Equal(t, handleCalled, true)
-	require.Equal(t, http.StatusOK, rr.Code)
-}
-
-func TestMiddleware_OptionHandle_MissingToken(t *testing.T) {
-	validator, _, _ := setupTestAuth(t)
-	middleware := NewAuthMiddleware(validator)
-	handleCalled := false
-	testHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		handleCalled = true
-
-		// tại sao user_id và tenant_id not found in context?
-		// vì không tạo token (có chứa user_id và tenant_id) như các hàm Valid.
-		// Do đó khi không truyền token có chứa 2 trường này => lỗi not found
-
-		// tenantID, err := auth.ExtractTenantID(r.Context())
-		// require.NoError(t, err)
-		// require.Equal(t, "tenant_id-123", tenantID)
-
-		// userID, err := auth.ExtractUserID(r.Context())
-		// require.NoError(t, err)
-		// require.Equal(t, "user_id-123", userID)
-
-		w.WriteHeader(http.StatusOK)
-	})
-
-	// Create request and store response
-	req := httptest.NewRequest("POST", "/mcp", nil)
-	rr := httptest.NewRecorder()
-
-	// Execute
-	handler := middleware.OptionalHandler(testHandler)
-	handler.ServeHTTP(rr, req)
-
-	// Verify err code
-	assert.Equal(t, handleCalled, true)
-	assert.Equal(t, http.StatusOK, rr.Code)
-}
-
-func TestMiddleware_OptionHandle_InValidToken(t *testing.T) {
-	validator, _, _ := setupTestAuth(t)
-	middleware := NewAuthMiddleware(validator)
-
-	testHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		t.Fatal("Handler should not be called invalid token")
-	})
-
-	// create request and store response
-	req := httptest.NewRequest("POST", "/mcp", nil)
-	req.Header.Set("Authorization", "Invalid token")
-	rr := httptest.NewRecorder()
-
-	// Execute
-	hanlder := middleware.OptionalHandler(testHandler)
-	hanlder.ServeHTTP(rr, req)
-
-	// Verify err response
-	require.Equal(t, http.StatusUnauthorized, rr.Code)
-
-	var response protocol.Response
-
-	err := json.NewDecoder(rr.Body).Decode(&response)
-	require.NoError(t, err)
-	assert.NotNil(t, response.Error)
-	assert.Equal(t, protocol.AuthenticationRequired, response.Error.Code)
-	assert.Contains(t, response.Error.Message, "Invalid token")
-}
-
-func TestMiddleware_OptionHandle_ExpiredToken(t *testing.T) {
-	validator, privateKey, _ := setupTestAuth(t)
-	token, err := auth.GenerateDemoTokenWithExpiry(
-		"tenant_id-123",
-		"user_id-123",
-		[]string{"admin"},
-		privateKey,
-		-time.Hour,
-	)
-	require.NoError(t, err)
-	middleware := NewAuthMiddleware(validator)
-
-	// Create test handler
-	testHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		t.Fatal("Handler should not be called expired token")
-	})
-
-	// create request and  object store response
-	req := httptest.NewRequest("POST", "/mcp", nil)
-	req.Header.Set("Authorization", "Bearer "+token)
-	rr := httptest.NewRecorder() // lưu trữ dữ liệu response vào đây thay cho client/trình duyệt của client
-
-	// Execute
-	hanlder := middleware.OptionalHandler(testHandler)
-	hanlder.ServeHTTP(rr, req)
-
-	// Verify err response
-	require.Equal(t, http.StatusUnauthorized, rr.Code)
-
-	var response protocol.Response
-
-	errRes := json.NewDecoder(rr.Body).Decode(&response)
-	require.NoError(t, errRes)
-	assert.NotNil(t, response.Error)
-	assert.Equal(t, protocol.AuthenticationRequired, response.Error.Code)
-	assert.Contains(t, response.Error.Message, "failed to parse token")
 }

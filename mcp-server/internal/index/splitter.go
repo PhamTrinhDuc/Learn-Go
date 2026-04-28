@@ -128,14 +128,13 @@ func loadBatchDocs(ctx context.Context, filePaths []string) ([]schema.Document, 
 	return allDocs, nil
 }
 
-func convertToDocumentFormat(docs []schema.Document, tenantID string) ([]*database.Document, error) {
-	documents := make([]*database.Document, 0, len(docs))
+func convertToDocumentFormat(docs []schema.Document) ([]*database.KnowledgeBase, error) {
+	documents := make([]*database.KnowledgeBase, 0, len(docs))
 
 	for _, doc := range docs {
 		// Khởi tạo struct mới
-		formattedDoc := &database.Document{
-			ID:       uuid.New().String(),
-			TenantID: tenantID,
+		formattedDoc := &database.KnowledgeBase{
+			ID:       uuid.New(),
 			Content:  doc.PageContent,
 			Metadata: doc.Metadata,
 		}

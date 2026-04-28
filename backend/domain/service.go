@@ -3,6 +3,7 @@ package domain
 import (
 	"backend/internal/utils"
 	"context"
+	"time"
 )
 
 type CategoryType string
@@ -21,8 +22,8 @@ type Service struct {
 	DurationMinutes   int          `json:"duration_minutes" db:"duration_minutes"`
 	EstimatedDuration int          `json:"estimated_duration" db:"estimated_duration"`
 	IsActive          bool         `json:"is_active" db:"is_active"`
-	CreatedAt         string       `json:"created_at" db:"created_at"`
-	UpdatedAt         string       `json:"updated_at" db:"updated_at"`
+	CreatedAt         time.Time    `json:"created_at" db:"created_at"`
+	UpdatedAt         time.Time    `json:"updated_at" db:"updated_at"`
 }
 
 type ServiceRepository interface {

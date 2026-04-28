@@ -19,10 +19,10 @@ func TestLoadDocument(t *testing.T) {
 }
 
 func TestFormatDocument(t *testing.T) {
-	tenantID := "11111111-1111-1111-1111-111111111111"
+	// tenantID := "11111111-1111-1111-1111-111111111111"
 	file_path := "../../../data/VTI_Quy định_Quy định điền thông tin trên hệ thống VMS_v2.0.pdf"
 	docs, _ := loadDocs(context.Background(), file_path)
-	docsFormatted, err := convertToDocumentFormat(docs, tenantID)
+	docsFormatted, err := convertToDocumentFormat(docs)
 	assert.NoError(t, err)
 
 	assert.Condition(t, func() (success bool) {
@@ -48,7 +48,7 @@ func TestLoadBatchDocument(t *testing.T) {
 }
 
 func TestFormatBatchDocument(t *testing.T) {
-	tenantID := "11111111-1111-1111-1111-111111111111"
+	// tenantID := "11111111-1111-1111-1111-111111111111"
 	filePaths := []string{
 		"../../../data/VTI_Quy định thưởng đề xuất IP Kaizen-2019_V1.0.pdf",
 		"../../../data/VTI_Quy định_Quy định điền thông tin trên hệ thống VMS_v2.0.pdf",
@@ -56,7 +56,7 @@ func TestFormatBatchDocument(t *testing.T) {
 		// "../../../data/VTI_Thỏa thuận tạm ứng lương_v1.0.pdf",
 	}
 	docs, _ := loadBatchDocs(context.Background(), filePaths)
-	docsFormatted, err := convertToDocumentFormat(docs, tenantID)
+	docsFormatted, err := convertToDocumentFormat(docs)
 	assert.NoError(t, err)
 
 	assert.Condition(t, func() (success bool) {

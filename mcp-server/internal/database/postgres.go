@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/pgvector/pgvector-go"
@@ -22,16 +23,15 @@ type DBConfig struct {
 	MinConns int32 // tối thiếu X connect 1 lúc
 }
 
-type Document struct {
-	ID        string                 `json:"id"`
-	TenantID  string                 `json:"tenant_id"`
+type KnowledgeBase struct {
+	ID        uuid.UUID              `json:"id"`
+	BranchId  uuid.UUID              `json:branch_id`
 	Title     string                 `json:"title"`
 	Content   string                 `json:"content"`
 	Metadata  map[string]interface{} `json:"metadata"`
 	Embedding []float32              `json:"embedding,omitempty"`
 	CreatedAt time.Time              `json:"creatd_at"`
 	UpdatedAt time.Time              `json:"updated_at"`
-	CreatedBy *string                `json:"created_by,omitempty"` // use pointer to handle NULL
 }
 
 type DB struct {
@@ -107,10 +107,10 @@ func (db *DB) Close() {
 }
 
 // SetTenantContext sets the tenant ID for row-level security
-func (db *DB) setTententContext(ctx context.Context, tx pgx.Tx, tenantID string) error {
+func (db *DB) setTententContext(ctx context.Context, tx pgx.Tx) error {
 	// Note: SET commands don't support parameter binding ($1), so we use fmt.Sprintf
 	// The tenantID is validated to be a UUID by the JWT validator, so this is safe
-	query := fmt.Sprintf("SET LOCAL app.current_tenant_id = '%s'", tenantID)
+	query := fmt.Sprintf("SET LOCAL app.current_tenant_id = '%s'")
 	_, err := tx.Exec(ctx, query)
 	if err != nil {
 		return fmt.Errorf("failed to set tenant content: %w", err)
@@ -119,93 +119,92 @@ func (db *DB) setTententContext(ctx context.Context, tx pgx.Tx, tenantID string)
 }
 
 // BeginTx starts a new transaction with tenant context
-func (db *DB) BeginTx(ctx context.Context, tenantID string) (pgx.Tx, error) {
+func (db *DB) BeginTx(ctx context.Context) (pgx.Tx, error) {
 	tx, err := db.pool.Begin(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to begin transaction: %w", err)
 	}
-	if err := db.setTententContext(ctx, tx, tenantID); err != nil {
-		tx.Rollback(ctx)
-		return nil, fmt.Errorf("failed to set tenant context: %w", err)
-	}
 	return tx, nil
 }
 
-// InsertDocument inserts a new document
-func (db *DB) InsertDocument(ctx context.Context, tenantID string, doc *Document) error {
-	tx, err := db.BeginTx(ctx, tenantID)
+// InsertDocument inserts a new document into knowledge_base
+func (db *DB) InsertDocument(ctx context.Context, doc *KnowledgeBase) error {
+	tx, err := db.BeginTx(ctx)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback(ctx)
 
 	query := `
-		INSERT INTO documents (tenant_id, title, content, metadata, embedding, created_by) 
-		VALUES ($1, $2, $3, $4, $5, $6)
+		INSERT INTO knowledge_base (branch_id, title, content, metadata, embedding) 
+		VALUES ($1, $2, $3, $4, $5)
 		RETURNING id, created_at, updated_at
 	`
+
 	var embedding interface{}
 	if doc.Embedding != nil {
 		embedding = pgvector.NewVector(doc.Embedding)
 	}
+
 	err = tx.QueryRow(
 		ctx,
 		query,
-		doc.TenantID,
+		doc.BranchId,
 		doc.Title,
 		doc.Content,
 		doc.Metadata,
 		embedding,
-		doc.CreatedBy,
 	).Scan(&doc.ID, &doc.CreatedAt, &doc.UpdatedAt)
 
 	if err != nil {
-		return fmt.Errorf("failed to insert document to DB: %w", err)
+		return fmt.Errorf("failed to insert document: %w", err)
 	}
+
 	return tx.Commit(ctx)
 }
 
-// InsertBatchingDocument inserts batching new documents
-func (db *DB) InsertBatchingDocument(ctx context.Context, tenantID string, docs []*Document, numFields int) error {
+// InsertDocuments inserts multiple documents in a single transaction (batch insert)
+func (db *DB) InsertDocuments(ctx context.Context, docs []*KnowledgeBase) error {
 	if len(docs) == 0 {
-		return fmt.Errorf("Find 0 documents. Documents is required")
+		return nil
 	}
 
-	tx, err := db.BeginTx(ctx, tenantID)
+	tx, err := db.BeginTx(ctx)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback(ctx)
 
-	// 1. Chuẩn bị các thành phần cho câu query
-	index := 1
+	// 1. Chuẩn bị câu query động cho batch insert
 	valueStrings := make([]string, 0, len(docs))
-	valueArgs := make([]interface{}, 0, numFields)
+	valueArgs := make([]interface{}, 0, len(docs)*5) // 5 fields per row
+	index := 1
 
 	for _, doc := range docs {
-		placeholders := make([]string, numFields)
-		for i := range placeholders {
+		placeholders := make([]string, 5)
+		for i := 0; i < 5; i++ {
 			placeholders[i] = fmt.Sprintf("$%d", index)
 			index++
 		}
 		valueStrings = append(valueStrings, "("+strings.Join(placeholders, ", ")+")")
+
 		var embedding interface{}
 		if doc.Embedding != nil {
 			embedding = pgvector.NewVector(doc.Embedding)
 		}
 
 		valueArgs = append(valueArgs,
-			doc.TenantID,
+			doc.BranchId,
 			doc.Title,
 			doc.Content,
 			doc.Metadata,
 			embedding,
-			doc.CreatedBy,
 		)
 	}
+
 	// 2. Ghép nối câu query hoàn chỉnh
 	query := fmt.Sprintf(`
-		INSERT INTO documents (tenant_id, title, content, metadata, embedding, created_by)
+		INSERT INTO knowledge_base (branch_id, title, content, metadata, embedding)
 		VALUES %s
 		RETURNING id, created_at, updated_at`,
 		strings.Join(valueStrings, ","),
@@ -214,83 +213,75 @@ func (db *DB) InsertBatchingDocument(ctx context.Context, tenantID string, docs 
 	// 3. Thực thi
 	rows, err := tx.Query(ctx, query, valueArgs...)
 	if err != nil {
-		return fmt.Errorf("Error during perform batching query: %w", err)
+		return fmt.Errorf("error during batch insert query: %w", err)
 	}
-
 	defer rows.Close()
 
 	// 4. Scan kết quả ngược lại cho từng Document
 	i := 0
 	for rows.Next() {
-		if err := rows.Scan(&docs[i].ID, &docs[i].CreatedAt, &docs[i].UpdatedAt); err != nil {
-			return err
+		if i < len(docs) {
+			if err := rows.Scan(&docs[i].ID, &docs[i].CreatedAt, &docs[i].UpdatedAt); err != nil {
+				return err
+			}
+			i++
 		}
-		i++
 	}
+
+	if err := rows.Err(); err != nil {
+		return err
+	}
+
 	return tx.Commit(ctx)
 }
 
-// Search document using metadata (title, content, metadata match with query)
-func (db *DB) SearchDocuments(ctx context.Context, tenantID string, query string, limit int) ([]*Document, error) {
-	tx, err := db.BeginTx(ctx, tenantID)
-	if err != nil {
-		return nil, err
-	}
-	defer tx.Rollback(ctx)
-
+// SearchDocuments searches documents using text search
+func (db *DB) SearchDocuments(ctx context.Context, query string, limit int) ([]*KnowledgeBase, error) {
 	searchQuery := `
-		SELECT id, tenant_id, title, content, metadata, created_at, updated_at, created_by
-		FROM documents 
-		WHERE 
+		SELECT id, branch_id, title, content, metadata, created_at, updated_at
+		FROM knowledge_base 
+		WHERE is_active = TRUE AND 
 			to_tsvector('simple', f_unaccent(title || ' ' || content)) @@ websearch_to_tsquery('simple', unaccent($1))
 		ORDER BY ts_rank_cd(to_tsvector('simple', f_unaccent(title || ' ' || content)), websearch_to_tsquery('simple', unaccent($1))) DESC
 		LIMIT $2
 	`
-	rows, err := tx.Query(ctx, searchQuery, query, limit)
+	rows, err := db.pool.Query(ctx, searchQuery, query, limit)
 	if err != nil {
 		return nil, fmt.Errorf("failed to search documents: %w", err)
 	}
-
 	defer rows.Close()
 
-	var documents []*Document
+	var results []*KnowledgeBase
 	for rows.Next() {
-		doc := &Document{}
+		doc := &KnowledgeBase{}
 		err := rows.Scan(
 			&doc.ID,
-			&doc.TenantID,
+			&doc.BranchId,
 			&doc.Title,
 			&doc.Content,
 			&doc.Metadata,
 			&doc.CreatedAt,
 			&doc.UpdatedAt,
-			&doc.CreatedBy,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan document: %w", err)
 		}
-		documents = append(documents, doc)
+		results = append(results, doc)
 	}
-	return documents, nil
+	return results, nil
 }
 
-func (db *DB) GetDocument(ctx context.Context, tenantID, docID string) (*Document, error) {
-	tx, err := db.BeginTx(ctx, tenantID)
-	if err != nil {
-		return nil, err
-	}
-	defer tx.Rollback(ctx)
-
+func (db *DB) GetDocument(ctx context.Context, docID uuid.UUID) (*KnowledgeBase, error) {
 	query := `
-		SELECT id, tenant_id, title, content, metadata, embedding, created_at, updated_at, created_by
-		FROM documents
-		WHERE id = $1
+		SELECT id, branch_id, title, content, metadata, embedding, created_at, updated_at
+		FROM knowledge_base
+		WHERE id = $1 AND is_active = TRUE
 	`
-	doc := &Document{}
+	doc := &KnowledgeBase{}
 	var dbEmbedding *pgvector.Vector
-	err = tx.QueryRow(ctx, query, docID).Scan(
-		&doc.ID, &doc.TenantID, &doc.Title, &doc.Content, &doc.Metadata,
-		&dbEmbedding, &doc.CreatedAt, &doc.UpdatedAt, &doc.CreatedBy,
+	err := db.pool.QueryRow(ctx, query, docID).Scan(
+		&doc.ID, &doc.BranchId, &doc.Title, &doc.Content, &doc.Metadata,
+		&dbEmbedding, &doc.CreatedAt, &doc.UpdatedAt,
 	)
 	if err == pgx.ErrNoRows {
 		return nil, fmt.Errorf("document not found")
@@ -306,126 +297,87 @@ func (db *DB) GetDocument(ctx context.Context, tenantID, docID string) (*Documen
 	return doc, nil
 }
 
-// ListDocuments lists all documents for a tenant
-func (db *DB) ListDocuments(ctx context.Context, tenantID string, limit int, offset int) ([]*Document, error) {
-	tx, err := db.BeginTx(ctx, tenantID)
-	if err != nil {
-		return nil, err
-	}
-	defer tx.Rollback(ctx)
-
+// ListDocuments lists all documents
+func (db *DB) ListDocuments(ctx context.Context, limit int, offset int) ([]*KnowledgeBase, error) {
 	query := `
-		SELECT id, tenant_id, title, content, metadata, created_at, updated_at, created_by
-		FROM documents 
+		SELECT id, branch_id, title, content, metadata, created_at, updated_at
+		FROM knowledge_base 
+		WHERE is_active = TRUE
 		ORDER BY created_at DESC 
 		LIMIT $1 OFFSET $2
 	`
 
-	rows, err := tx.Query(ctx, query, limit, offset)
+	rows, err := db.pool.Query(ctx, query, limit, offset)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list documents: %w", err)
 	}
-
 	defer rows.Close()
 
-	documents := []*Document{}
+	var results []*KnowledgeBase
 	for rows.Next() {
-		doc := &Document{}
+		doc := &KnowledgeBase{}
 		err := rows.Scan(
 			&doc.ID,
-			&doc.TenantID,
+			&doc.BranchId,
 			&doc.Title,
 			&doc.Content,
 			&doc.Metadata,
 			&doc.CreatedAt,
 			&doc.UpdatedAt,
-			&doc.CreatedBy,
 		)
-
 		if err != nil {
 			return nil, fmt.Errorf("failed to Scan documents: %w", err)
 		}
-		documents = append(documents, doc)
+		results = append(results, doc)
 	}
-	return documents, nil
+	return results, nil
 }
 
-// UpdateDocument updates an existing document
-func (db *DB) UpdateDocument(ctx context.Context, tenantID string, doc *Document) error {
-	tx, err := db.BeginTx(ctx, tenantID)
+// UpdateDocument updates an existing document in knowledge_base
+func (db *DB) UpdateDocument(ctx context.Context, doc *KnowledgeBase) error {
+	tx, err := db.BeginTx(ctx)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback(ctx)
 
 	query := `
-		UPDATE documents
-		SET title = $1, content = $2, metadata = $3, embedding = $4
-		WHERE id = $5
+		UPDATE knowledge_base
+		SET title = $1, content = $2, metadata = $3, embedding = $4, branch_id = $5
+		WHERE id = $6
 		RETURNING updated_at
 	`
-	err = tx.QueryRow(ctx, query, doc.Title, doc.Content, doc.Metadata, doc.Embedding, doc.ID).Scan(&doc.UpdatedAt)
+	var embedding interface{}
+	if doc.Embedding != nil {
+		embedding = pgvector.NewVector(doc.Embedding)
+	}
+
+	err = tx.QueryRow(ctx, query, doc.Title, doc.Content, doc.Metadata, embedding, doc.BranchId, doc.ID).Scan(&doc.UpdatedAt)
 	if err == pgx.ErrNoRows {
 		return fmt.Errorf("document not found")
 	}
 	if err != nil {
-		return nil
+		return err
 	}
 	return tx.Commit(ctx)
 }
 
-// DeleteDocument deletes a document by ID
-func (db *DB) DeleteDocumentByID(ctx context.Context, tenantID string, docID string) error {
-	tx, err := db.BeginTx(ctx, tenantID)
+// DeleteDocumentByID deletes a document by ID
+func (db *DB) DeleteDocumentByID(ctx context.Context, docID uuid.UUID) error {
+	tx, err := db.BeginTx(ctx)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback(ctx)
 
-	query := `DELETE FROM documents WHERE id = $1`
+	query := `DELETE FROM knowledge_base WHERE id = $1`
 	result, err := tx.Exec(ctx, query, docID)
 	if err != nil {
-		return nil
-	}
-
-	if result.RowsAffected() == 0 {
-		return fmt.Errorf("document not found")
-	}
-	return tx.Commit(ctx)
-}
-
-// DeleteDocument deletes a document by ID
-func (db *DB) DeleteDocumentByTenantID(ctx context.Context, tenantID string) error {
-	tx, err := db.BeginTx(ctx, tenantID)
-	if err != nil {
 		return err
 	}
-	defer tx.Rollback(ctx)
-
-	query := `DELETE FROM documents WHERE tenant_id = $1`
-	result, err := tx.Exec(ctx, query, tenantID)
-	if err != nil {
-		return nil
-	}
 
 	if result.RowsAffected() == 0 {
 		return fmt.Errorf("document not found")
 	}
 	return tx.Commit(ctx)
-
-}
-
-func (db *DB) GetTenantSettings(ctx context.Context, tenantID string) (map[string]interface{}, error) {
-	query := `SELECT settings FROM tenants WHERE id = $1 AND is_active = true`
-
-	var settings map[string]interface{}
-	err := db.pool.QueryRow(ctx, query, tenantID).Scan(&settings)
-	if err == pgx.ErrNoRows {
-		return nil, fmt.Errorf("tenant not found or inactive")
-	}
-	if err != nil {
-		return nil, fmt.Errorf("failed to get tenant settings: %w", err)
-	}
-
-	return settings, nil
 }

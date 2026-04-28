@@ -1,21 +1,21 @@
 package database
 
-import "context"
+import (
+	"context"
+
+	"github.com/google/uuid"
+)
 
 // Store defines the interface for database operations
 // This interface enables testing with mocks
 type Store interface {
-	// GetDocument retrieves a document by ID for a specific tenant
-	GetDocument(ctx context.Context, tenantID, docID string) (*Document, error)
-
-	// SearchDocuments performs full-text search on documents
-	SearchDocuments(ctx context.Context, tenantID, query string, limit int) ([]*Document, error)
-
-	// ListDocuments lists documents for a tenant with pagination
-	ListDocuments(ctx context.Context, tenantID string, limit, offset int) ([]*Document, error)
-
-	// HybridSearch performs hybrid BM25 + vector search with RRF
-	HybridSearch(ctx context.Context, tenantID string, params HybridSearchParams) ([]HybridSearchResult, error)
+	InsertDocument(ctx context.Context, doc *KnowledgeBase) error
+	InsertDocuments(ctx context.Context, docs []*KnowledgeBase) error
+	SearchDocuments(ctx context.Context, query string, limit int) ([]*KnowledgeBase, error)
+	GetDocument(ctx context.Context, docID uuid.UUID) (*KnowledgeBase, error)
+	ListDocuments(ctx context.Context, limit int, offset int) ([]*KnowledgeBase, error)
+	UpdateDocument(ctx context.Context, doc *KnowledgeBase) error
+	DeleteDocumentByID(ctx context.Context, docID uuid.UUID) error
 }
 
 // Ensure DB implements Store interface

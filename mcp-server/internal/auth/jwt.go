@@ -1,9 +1,13 @@
 package auth
 
 import (
-	"context"
+	"crypto/rand"
 	"crypto/rsa"
+	"crypto/x509"
+	"encoding/pem"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -13,144 +17,175 @@ import (
 type ContextKey string
 
 const (
-	// context key for tenant ID
-	ContextKeyTenantID ContextKey = "tenant_id"
 	// context key for user ID
 	ContextKeyUserID ContextKey = "user_id"
-	// context key for authorization scopes
-	ContextKeyScopes ContextKey = "scopes"
+	// context key for user email
+	ContextKeyEmail ContextKey = "email"
+	// context key for user role
+	ContextKeyRole ContextKey = "role"
 )
 
-type JWTValidator struct {
-	publicKey *rsa.PublicKey
-	issuer    string
-	audience  string
-}
-
-// Cấu hình cho JWT
-type Config struct {
-	PublicKeyPEM string // RSA public key in PEM format
-	Issuer       string // Expected token issuer
-	Audience     string // Expected token audience
-}
-
-// Cấu trúc để JWTValidator parse token ra
-type Claims struct {
-	TenantID string   `json: "tenant_id"` // tag json: ánh xạ field trong struct sang key trong json
-	UserID   string   `json: "user_id"`
-	Email    string   `json: "email,omitempty"`
-	Scopes   []string `json: "scopes,omitempty"`
+// JWTClaims represents JWT token claims
+type JWTClaims struct {
+	UserID string `json:"user_id"`
+	Email  string `json:"email"`
+	Role   string `json:"role"`
 	jwt.RegisteredClaims
 }
 
-// Khởi tạo new JWT Validator (constructor)
-func NewJWTValidator(cfg Config) (*JWTValidator, error) {
-	// 1. Parse RSA Public key from PEM
-	publicKey, err := jwt.ParseRSAPublicKeyFromPEM([]byte(cfg.PublicKeyPEM))
-	if err != nil {
-		return nil, fmt.Errorf("failed to parse Publickey in format PEM")
+// EnsureKeysExist creates RSA keys if they don't exist
+func EnsureKeysExist(dir string) error {
+	privPath := filepath.Join(dir, "private_key.pem")
+	pubPath := filepath.Join(dir, "public_key.pem")
+
+	// If keys already exist, do nothing
+	if _, err := os.Stat(privPath); err == nil {
+		return nil
 	}
-	// 2. Return address JWTValidator for pointer
-	return &JWTValidator{
-		publicKey: publicKey,
-		issuer:    cfg.Issuer,
-		audience:  cfg.Audience,
-	}, nil
+
+	// Ensure directory exists
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return err
+	}
+
+	// Generate RSA key pair
+	privateKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		return err
+	}
+
+	// Save Private Key
+	privFile, err := os.Create(privPath)
+	if err != nil {
+		return err
+	}
+	defer privFile.Close()
+
+	privBlock := &pem.Block{
+		Type:  "RSA PRIVATE KEY",
+		Bytes: x509.MarshalPKCS1PrivateKey(privateKey),
+	}
+	if err := pem.Encode(privFile, privBlock); err != nil {
+		return err
+	}
+
+	// Save Public Key
+	pubFile, err := os.Create(pubPath)
+	if err != nil {
+		return err
+	}
+	defer pubFile.Close()
+
+	pubASN1, err := x509.MarshalPKIXPublicKey(&privateKey.PublicKey)
+	if err != nil {
+		return err
+	}
+
+	pubBlock := &pem.Block{
+		Type:  "PUBLIC KEY",
+		Bytes: pubASN1,
+	}
+	if err := pem.Encode(pubFile, pubBlock); err != nil {
+		return err
+	}
+
+	return nil
 }
 
-// ValidateToken validates JWT token and return claims
-func (v *JWTValidator) ValidateToken(tokenString string) (*Claims, error) {
-	// 1. Remove Bearer prefix and extra spaces robustly
-	for strings.HasPrefix(strings.ToLower(tokenString), "bearer ") {
-		tokenString = strings.TrimSpace(tokenString[7:])
+// ExtractTokenFromHeader extracts JWT token from Authorization header
+func ExtractTokenFromHeader(authHeader string) (string, error) {
+	if authHeader == "" {
+		return "", fmt.Errorf("authorization header required")
 	}
-	tokenString = strings.TrimSpace(tokenString)
-	// 2. Parse and validate token
-	token, err := jwt.ParseWithClaims(
-		tokenString, // token để parse
-		&Claims{},   // khuôn để dổ dữ liệu vào (pointer để có thể ghi dữ liệu vào)
-		func(token *jwt.Token) (interface{}, error) { // callback để cấp key verify
-			if _, ok := token.Method.(*jwt.SigningMethodRSA); !ok { // token.Method có kiểu jwt.SigningMethod - 1 interface. Go chưa biết là RSA hay HMAC. Dùng .(type) để hỏi: token.Method có phải là *jwt.SigningMethodRSA không
-				return nil, fmt.Errorf("unexprected signing method: %v", token.Header["alg"])
+
+	parts := strings.SplitN(authHeader, " ", 2)
+	if len(parts) != 2 || parts[0] != "Bearer" {
+		return "", fmt.Errorf("invalid authorization header format, expected: Bearer <token>")
+	}
+
+	return parts[1], nil
+}
+
+// ValidateToken validates a JWT token string using RSA or HMAC fallback
+func ValidateToken(tokenString string) (*JWTClaims, error) {
+	pubKeyPath := "tmp/demo-keys/public_key.pem"
+
+	claims := &JWTClaims{}
+
+	token, err := jwt.ParseWithClaims(tokenString, claims, func(token *jwt.Token) (interface{}, error) {
+		data, readErr := os.ReadFile(pubKeyPath)
+
+		// Nhánh RSA: chỉ vào khi file tồn tại VÀ đọc được
+		if readErr == nil {
+			if _, ok := token.Method.(*jwt.SigningMethodRSA); !ok {
+				return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
 			}
-			return v.publicKey, nil
-		})
-	if err != nil { // không phải kiểu *jwt.SigningMethodRSA
-		return nil, fmt.Errorf("failed to parse token: %w", err)
-	}
-	// có phải Claims có các trường như đã định nghĩa không
-	claims, ok := token.Claims.(*Claims)
-	if !ok || !token.Valid {
-		return nil, fmt.Errorf("Invalid token claims")
-	}
-	// 3. Validate Issuer and Audience
-	if claims.Issuer != v.issuer {
-		return nil, fmt.Errorf("Invalid issuer: expected %s, got %s", v.issuer, claims.Issuer)
-	}
-	validAudience := false
-	for _, aud := range claims.Audience {
-		if aud == v.audience {
-			validAudience = true
-			break
+
+			block, _ := pem.Decode(data)
+			if block == nil {
+				return nil, fmt.Errorf("failed to decode PEM block from public key file")
+			}
+
+			pub, err := x509.ParsePKIXPublicKey(block.Bytes)
+			if err != nil {
+				return nil, fmt.Errorf("failed to parse public key: %w", err)
+			}
+
+			rsaPub, ok := pub.(*rsa.PublicKey)
+			if !ok {
+				return nil, fmt.Errorf("key is not an RSA public key")
+			}
+
+			return rsaPub, nil
 		}
-	}
-	if !validAudience {
-		return nil, fmt.Errorf("Invalid audience")
+
+		// Nhánh HMAC: chỉ vào khi file KHÔNG tồn tại
+		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
+			return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
+		}
+
+		secret := os.Getenv("JWT_SECRET")
+		if secret == "" {
+			secret = "your-secret-key-change-this-in-production"
+		}
+		return []byte(secret), nil
+	})
+
+	if err != nil || !token.Valid {
+		return nil, fmt.Errorf("invalid token: %v", err)
 	}
 
-	// 4. Validate expriration
-	if claims.ExpiresAt != nil && claims.ExpiresAt.Before(time.Now()) {
-		return nil, fmt.Errorf("token expired")
-	}
-
-	// 5. Validate tenant ID is present
-	if claims.TenantID == "" {
-		return nil, fmt.Errorf("tenant_id in claim is required")
-	}
 	return claims, nil
-
 }
 
-func ExtractTenantID(ctx context.Context) (string, error) {
-	tenantID, oke := ctx.Value(ContextKeyTenantID).(string)
-	if !oke || tenantID == "" {
-		return "", fmt.Errorf("tanent_id not found in context")
-	}
-	return tenantID, nil
-}
-
-func WithAuth(ctx context.Context, claims *Claims) context.Context {
-	ctx = context.WithValue(ctx, ContextKeyUserID, claims.UserID)
-	ctx = context.WithValue(ctx, ContextKeyTenantID, claims.TenantID)
-	ctx = context.WithValue(ctx, ContextKeyScopes, claims.Scopes)
-	return ctx
-}
-
-func ExtractUserID(ctx context.Context) (string, error) {
-	userID, oke := ctx.Value(ContextKeyUserID).(string)
-	if !oke || userID == "" {
-		return "", fmt.Errorf("user_id not found in context")
-	}
-	return userID, nil
-}
-
-func ExtractScopes(ctx context.Context) ([]string, error) {
-	scopes, oke := ctx.Value(ContextKeyScopes).([]string)
-	if !oke || len(scopes) == 0 {
-		return []string{}, fmt.Errorf("scopes not found in context")
-	}
-	return scopes, nil
-}
-
-func hasScope(ctx context.Context, requiredScope string) bool {
-	scopes, err := ExtractScopes(ctx)
+// GenerateTokenWithPrivateKey signs a token using the RSA private key
+func GenerateTokenWithPrivateKey(userID, email, role string) (string, error) {
+	privKeyPath := "tmp/demo-keys/private_key.pem"
+	privKeyData, err := os.ReadFile(privKeyPath)
 	if err != nil {
-		return false
+		return "", fmt.Errorf("failed to read private key: %w", err)
 	}
-	for _, scope := range scopes {
-		if scope == requiredScope {
-			return true
-		}
+
+	block, _ := pem.Decode(privKeyData)
+	if block == nil {
+		return "", fmt.Errorf("failed to decode private key PEM")
 	}
-	return false
+
+	privKey, err := x509.ParsePKCS1PrivateKey(block.Bytes)
+	if err != nil {
+		return "", fmt.Errorf("failed to parse private key: %w", err)
+	}
+
+	claims := &JWTClaims{
+		UserID: userID,
+		Email:  email,
+		Role:   role,
+		RegisteredClaims: jwt.RegisteredClaims{
+			ExpiresAt: jwt.NewNumericDate(time.Now().Add(24 * time.Hour)),
+			IssuedAt:  jwt.NewNumericDate(time.Now()),
+		},
+	}
+
+	token := jwt.NewWithClaims(jwt.SigningMethodRS256, claims)
+	return token.SignedString(privKey)
 }

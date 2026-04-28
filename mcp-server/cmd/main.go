@@ -2,11 +2,8 @@ package main
 
 import (
 	"context"
-	"crypto/rsa"
-	"crypto/x509"
-	"encoding/pem"
 	"log"
-	auth_internal "mcp-server/internal/auth"
+	"mcp-server/internal/auth"
 	"mcp-server/internal/database"
 	"mcp-server/internal/middleware"
 	"mcp-server/internal/observability"
@@ -16,6 +13,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 
@@ -24,7 +22,7 @@ import (
 )
 
 const (
-	defaultPort      = "8080"
+	defaultPort      = "8081"
 	defaultDBHost    = "localhost"
 	defaultDBPort    = 5433
 	defaultRedisHost = "localhost"
@@ -40,35 +38,6 @@ type Config struct {
 	EnableMetrics bool
 }
 
-func setupAuth() (*auth_internal.JWTValidator, *rsa.PrivateKey, error) {
-	keysDir := utils.GetEnvString("DEMO_KEYS_DIR", "./tmp/demo-keys")
-	privateKeyPath := keysDir + "/private_key.pem"
-	privData, err := os.ReadFile(privateKeyPath)
-	if err != nil {
-		return nil, nil, err
-	}
-	block, _ := pem.Decode(privData)
-	privateKey, err := x509.ParsePKCS1PrivateKey(block.Bytes)
-	if err != nil {
-		return nil, nil, err
-	}
-
-	publicKeyPath := keysDir + "/public_key.pem"
-	pubData, err := os.ReadFile(publicKeyPath)
-	if err != nil {
-		return nil, nil, err
-	}
-
-	validator, err := auth_internal.NewJWTValidator(
-		auth_internal.Config{
-			PublicKeyPEM: string(pubData),
-			Issuer:       "mcp-server-demo",
-			Audience:     "mcp-server",
-		},
-	)
-	return validator, privateKey, err
-}
-
 func loadConfig() Config {
 	return Config{
 		Port: utils.GetEnvString("PORT", defaultPort),
@@ -77,61 +46,115 @@ func loadConfig() Config {
 			Port:     utils.GetEnvInt("DB_PORT", defaultDBPort),
 			User:     utils.GetEnvString("DB_USER", "mcp_user"),
 			Password: utils.GetEnvString("DB_PASSWORD", "mcp_password"),
-			DBName:   utils.GetEnvString("DB_NAME", "mcp_db"),
+			DBName:   utils.GetEnvString("DB_NAME", "salon_chain"),
 			SSLMode:  utils.GetEnvString("DB_SSLMODE", "disable"),
+			MaxConns: int32(utils.GetEnvInt("DB_MAX_CONNS", 25)),
+			MinConns: int32(utils.GetEnvInt("DB_MIN_CONNS", 5)),
 		},
 		Redis: redis.RedisConfig{
 			Host:     utils.GetEnvString("REDIS_HOST", defaultRedisHost),
 			Port:     utils.GetEnvInt("REDIS_PORT", defaultRedisPort),
+			Username: utils.GetEnvString("REDIS_USERNAME", "jiyuu"),
 			Password: utils.GetEnvString("REDIS_PASSWORD", "a2amcpgo"),
+			DB:       utils.GetEnvInt("REDIS_DB", 0),
+			PoolSize: utils.GetEnvInt("REDIS_POOL_SIZE", 10),
+			MinCons:  utils.GetEnvInt("REDIS_MIN_CONNS", 2),
 		},
 		Telemetry: observability.Config{
-			ServiceName: "mcp-server",
+			ServiceName:    utils.GetEnvString("OTEL_SERVICE", "mcp-server"),
+			ServiceVersion: utils.GetEnvString("OTEL_VERSION", "1.0.0"),
+			Environment:    utils.GetEnvString("ENVIRONMENT", "development"),
+			OTLPEndpoint:   utils.GetEnvString("OTEL_EXPORTER_OTLP_ENDPOINT", "localhost:4318"),
+			SamplingRate:   utils.GetEnvFloat("OTEL_TRACES_SAMPLER_ARG", 1.0),
+			EnableTracing:  utils.GetEnvBool("OTEL_ENABLE_TRACING", true),
+			EnableMetrics:  utils.GetEnvBool("OTEL_ENABLE_METRICS", true),
 		},
-		EnableTracing: true,
-		EnableMetrics: true,
 	}
 }
 
 func main() {
+	// 1. Init context and config
 	ctx := context.Background()
 	cfg := loadConfig()
 
+	// 2. Init Services
+	// a. Init Database
 	db, err := database.NewDB(ctx, cfg.Database)
 	if err != nil {
 		log.Fatalf("DB fail: %v", err)
 	}
 	defer db.Close()
-
+	// b. Init Redis
 	redis, err := redis.NewRedis(ctx, cfg.Redis)
 	if err != nil {
 		log.Fatalf("Redis fail: %v", err)
 	}
 	defer redis.Close()
 
-	jwtValidator, _, err := setupAuth()
+	// c. Init Telemetry
+	telemetry, err := observability.NewTelemetry(ctx, cfg.Telemetry)
 	if err != nil {
-		log.Printf("Warning: Auth setup failed: %v", err)
+		log.Fatalf("Failed to initialize telemetry: %v", err)
+	}
+
+	// tạo context mới để shutdown thay vì shutdown trực tiếp để tránh cancel context chính của app
+	defer func() {
+		shudownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := telemetry.Shutdown(shudownCtx); err != nil {
+			log.Fatalf("Error shutting down telemetry: %v", err)
+		}
+	}()
+	log.Println("OpenTelemetry initialized successfully")
+
+	// d. Init middleware
+	authMid := middleware.NewAuthMiddleware()
+	rateLimiter := middleware.NewFixedWindowLimiter(redis.Client, 100, time.Minute)
+	tracingMiddleware := middleware.NewTracingMiddleware(telemetry)
+
+	// e. Init RSA keys for testing
+	keyDir := filepath.Join("tmp", "demo-keys")
+	if err := auth.EnsureKeysExist(keyDir); err != nil {
+		log.Printf("Warning: Failed to ensure keys: %v", err)
+	} else {
+		log.Printf("RSA keys ensured in %s", keyDir)
+		// Generate a test token for debugging
+		testToken, err := auth.GenerateTokenWithPrivateKey("admin-123", "admin@example.com", "admin")
+		if err == nil {
+			log.Printf("\n--- TEST TOKEN (COPY EVERYTHING BETWEEN LINES) ---\n%s\n--- END TOKEN ---\n\n", testToken)
+		} else {
+			log.Printf("Warning: failed to generate token: %v", err)
+		}
 	}
 
 	r := gin.Default()
 
-	// 1. Health & Metrics
-	r.GET("/health", func(c *gin.Context) {
-		c.JSON(http.StatusOK, gin.H{"status": "healthy"})
+	r.Use(tracingMiddleware.Handler())
+
+	// 3. Health & Metrics
+	r.GET("/", func(ctx *gin.Context) {
+		ctx.JSON(http.StatusOK, gin.H{
+			"message": "Welcome to A2A MCP Server",
+			"version": "1.0.0",
+			"status":  "running",
+		})
 	})
+	r.GET("/health", func(ctx *gin.Context) {
+		ctx.JSON(http.StatusOK, gin.H{"status": "healthy"})
+	})
+
 	if cfg.EnableMetrics {
 		r.GET("/metrics", gin.WrapH(promhttp.Handler()))
 	}
 
-	// 2. MCP Endpoint with Gin
-	authMid := middleware.NewAuthMiddleware(jwtValidator)
-	mcpHandler := server.NewSSEHandler(db)
+	// 4. MCP Endpoint with Gin
+	mcpHandler := server.NewSSEHandler(db, telemetry)
 
 	mcpGroup := r.Group("/mcp")
-	if jwtValidator != nil {
-		mcpGroup.Use(authMid.Handler())
-	}
+	mcpGroup.Use(
+		authMid.Handler(),
+		rateLimiter.Handler(),
+	)
 	{
 		// Official SDK SSE transport needs wildcards for session handling
 		mcpGroup.Any("/*path", gin.WrapH(mcpHandler))

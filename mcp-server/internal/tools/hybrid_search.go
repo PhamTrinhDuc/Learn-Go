@@ -3,7 +3,6 @@ package tools
 import (
 	"context"
 	"fmt"
-	"mcp-server/internal/auth"
 	"mcp-server/internal/database"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -44,18 +43,14 @@ type HybridArgs struct {
 }
 
 func (t *HybridSearchTool) Handler(ctx context.Context, req *mcp.CallToolRequest, args HybridArgs) (*mcp.CallToolResult, any, error) {
-	tenantID, err := auth.ExtractTenantID(ctx)
-	if err != nil {
-		res := &mcp.CallToolResult{IsError: true}
-		return res, mcp.TextContent{Text: fmt.Sprintf("authentication required: %v", err)}, nil
-	}
+
 
 	limit := int(args.Limit)
 	if limit <= 0 {
 		limit = 10
 	}
 
-	documents, err := t.db.SearchDocuments(ctx, tenantID, args.Query, limit)
+	documents, err := t.db.SearchDocuments(ctx, args.Query, limit)
 	if err != nil {
 		res := &mcp.CallToolResult{IsError: true}
 		return res, mcp.TextContent{Text: fmt.Sprintf("hybrid search failed: %v", err)}, nil

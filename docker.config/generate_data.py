@@ -5,6 +5,7 @@ import psycopg2
 from psycopg2.extras import execute_values
 from datetime import date, datetime, timedelta
 from faker import Faker
+from werkzeug.security import generate_password_hash
 
 fake = Faker("vi_VN")
 random.seed(42)
@@ -12,10 +13,10 @@ random.seed(42)
 # --- DB CONFIG (MOCK) ---
 DB_CONFIG = {
     "host": "localhost",
-    "port": 5432,
-    "database": "hair_salon",
-    "user": "postgres",
-    "password": "your_password"
+    "port": 5433,
+    "database": "salon_chain",
+    "user": "mcp_user",
+    "password": "mcp_password"
 }
 
 def get_db_connection():
@@ -113,31 +114,57 @@ def main():
 
         used = {"0900000001","0900000002","0900000003","0900000004"}
         users = [
-            {"id":uid(),"name":"Chủ chuỗi","phone":"0900000001","birthday":None,"address":"TP.HCM",
+            {"id":uid(),"name":"Chủ chuỗi","phone":"0900000001","email":"owner@salon.com","username":"owner","password_plain":"password123","birthday":None,"address":"TP.HCM",
              "role":"owner","loyalty_points":0,"preferred_branch_id":None,"last_visit_at":None},
-            {"id":uid(),"name":"Manager Q1","phone":"0900000002","birthday":None,"address":branches[0]["address"],
+            {"id":uid(),"name":"Manager Q1","phone":"0900000002","email":"managerq1@salon.com","username":"managerq1","password_plain":"password123","birthday":None,"address":branches[0]["address"],
              "role":"manager","loyalty_points":0,"preferred_branch_id":branch_ids[0],"last_visit_at":None},
-            {"id":uid(),"name":"Manager Q3","phone":"0900000003","birthday":None,"address":branches[1]["address"],
+            {"id":uid(),"name":"Manager Q3","phone":"0900000003","email":"managerq3@salon.com","username":"managerq3","password_plain":"password123","birthday":None,"address":branches[1]["address"],
              "role":"manager","loyalty_points":0,"preferred_branch_id":branch_ids[1],"last_visit_at":None},
-            {"id":uid(),"name":"Manager BT","phone":"0900000004","birthday":None,"address":branches[2]["address"],
+            {"id":uid(),"name":"Manager BT","phone":"0900000004","email":"managerbt@salon.com","username":"managerbt","password_plain":"password123","birthday":None,"address":branches[2]["address"],
              "role":"manager","loyalty_points":0,"preferred_branch_id":branch_ids[2],"last_visit_at":None},
         ]
+        
+        # Tạo thêm 10 khách hàng với thông tin thực tế hơn
         customers = []
-        for _ in range(100):
+        for i in range(10):
             while True:
                 phone = "09" + "".join(str(random.randint(0,9)) for _ in range(8))
-                if phone not in used: used.add(phone); break
-            seg  = random.choice(segs)
-            lo,hi = lv[seg]
-            lv_at = (now - timedelta(days=random.randint(lo,hi))).strftime("%Y-%m-%d %H:%M:%S+07")
-            p     = random.randint(*pts[seg])
-            bday  = date(random.randint(1980,2005), random.randint(1,12), random.randint(1,28))
-            c = {"id":uid(),"name":fake.name(),"phone":phone,"birthday":bday.isoformat(),
-                 "address":fake.address().replace("\n",", "),"role":"customer",
-                 "loyalty_points":p,"preferred_branch_id":random.choice(branch_ids),"last_visit_at":lv_at}
-            users.append(c); customers.append(c)
+                if phone not in used: 
+                    used.add(phone)
+                    break
+            
+            full_name = fake.name()
+            # Tạo username từ tên (không dấu)
+            username_base = "".join(filter(str.isalnum, full_name.lower())).replace("đ", "d")
+            username = f"{username_base[:10]}{random.randint(100, 999)}"
+            
+            bday = date(random.randint(1985, 2005), random.randint(1, 12), random.randint(1, 28))
+            
+            c = {
+                "id": uid(),
+                "name": full_name,
+                "phone": phone,
+                "email": fake.email(),
+                "username": username,
+                "password_plain": "customer123",
+                "birthday": bday.isoformat(),
+                "address": fake.address().replace("\n", ", "),
+                "role": "customer",
+                "loyalty_points": random.randint(0, 500),
+                "preferred_branch_id": random.choice(branch_ids),
+                "last_visit_at": (now - timedelta(days=random.randint(1, 60))).strftime("%Y-%m-%d %H:%M:%S+07")
+            }
+            users.append(c)
+            customers.append(c)
 
-        insert_to_db(cur, "users", ["id","name","phone","birthday","address","role","loyalty_points","preferred_branch_id","last_visit_at"], users)
+        # Hash passwords before insertion and print for visibility
+        print("\n--- GENERATED USERS CREDENTIALS ---")
+        for u in users:
+            u["password_hash"] = generate_password_hash(u["password_plain"])
+            print(f"Role: {u['role']:<10} | Username: {u['username']:<15} | Password: {u['password_plain']}")
+        print("-----------------------------------\n")
+
+        insert_to_db(cur, "users", ["id","name","phone","email","username","password_hash","birthday","address","role","loyalty_points","preferred_branch_id","last_visit_at"], users)
 
         # ── 7. BOOKING ───────────────────────────────────────────────────────────────
         wday_w   = [1,2,3,3,3,5,5,3,2,1,1,1]
@@ -164,17 +191,15 @@ def main():
                     "stylist_id":random.choice(pool),"service_id":svc["id"],
                     "scheduled_at":sch.strftime("%Y-%m-%d %H:%M:%S+07"),
                     "duration_minutes":svc["duration_minutes"],
-                    "estimated_duration":svc["estimated_duration"],
-                    "actual_duration":None,"status":status,
+                    "status":status,
                     "cancel_reason":"Khách bận đột xuất" if status=="cancelled" else None,
-                    "source":random.choices(["zalo","web","agent","manual"],weights=[40,30,20,10])[0],
-                    "notes":None,"check_in_at":None,"completed_at":None,
+                    "source":random.choices(["zalo","web","agent","manual"],weights=[40,30,20,10])[0]
                 })
 
         insert_to_db(cur, "booking",
             ["id","user_id","branch_id","stylist_id","service_id","scheduled_at",
-             "duration_minutes","estimated_duration","actual_duration","status",
-             "cancel_reason","source","notes","check_in_at","completed_at"],
+             "duration_minutes","status",
+             "cancel_reason","source"],
             bookings)
 
         conn.commit()
