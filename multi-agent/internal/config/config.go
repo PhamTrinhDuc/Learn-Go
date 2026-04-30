@@ -1,4 +1,4 @@
-package internal
+package config
 
 import (
 	"fmt"
@@ -8,10 +8,11 @@ import (
 )
 
 type AgentConfig struct {
-	Name        string   `yaml:"name"`
-	Description string   `yaml:"description"`
-	Instruction string   `yaml:"instruction"`
-	Tools       []string `yaml:"tools"`
+	Name          string   `yaml:"name"`
+	Description   string   `yaml:"description"`
+	Instruction   string   `yaml:"instruction"`
+	AllowedTools  []string `yaml:"allowedTools"`
+	ApprovedTools []string `yaml:"ApprovedTools"`
 }
 
 type AppConfig struct {

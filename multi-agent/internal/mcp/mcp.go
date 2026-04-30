@@ -6,10 +6,10 @@ import (
 	"google.golang.org/adk/tool/mcptoolset"
 )
 
-func NewMCPTool(mcpServerURL string, allowedTools []string, approvalTools []string) (tool.Toolset, error) {
+func NewMCPTool(transport *mcp.SSEClientTransport, allowedTools []string, approvalTools []string) (tool.Toolset, error) {
 	// 1. Thiết lập Transport kết nối với MCP Server (Sử dụng SSE transport qua HTTP)
 	// Khởi tạo SSE client để giao tiếp với mcp-server
-	transport := &mcp.SSEClientTransport{Endpoint: mcpServerURL}
+	// transport := &mcp.SSEClientTransport{Endpoint: mcpServerURL}
 
 	// 2. Khởi tạo Toolset từ MCP
 	// mcptoolset sẽ fetch toàn bộ các tool từ mcp-server

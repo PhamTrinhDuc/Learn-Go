@@ -3,6 +3,7 @@ package mcp
 import (
 	"testing"
 
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"google.golang.org/adk/agent"
 	"google.golang.org/adk/session"
 	"google.golang.org/genai"
@@ -57,7 +58,8 @@ func TestNewMCP(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := NewMCPTool(tt.mcpServerURL, tt.allowedTools, tt.approvalTools)
+			transport := &mcp.SSEClientTransport{Endpoint: "htpp://localhost:8001"}
+			got, err := NewMCPTool(transport, tt.allowedTools, tt.approvalTools)
 
 			if err != nil {
 				t.Errorf("NewMCPTool() error = %v, wantErr %v", err, false)

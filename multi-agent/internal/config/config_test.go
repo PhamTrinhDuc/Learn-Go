@@ -1,4 +1,4 @@
-package internal
+package config
 
 import (
 	"testing"
@@ -16,13 +16,13 @@ func TestLoadAgentConfig(t *testing.T) {
 
 	// Kiểm tra booking_agent
 	assert.Equal(t, "booking_agent", bookingAgent.Name)
-	assert.Contains(t, bookingAgent.Tools, "get_available_slots")
-	assert.Contains(t, bookingAgent.Tools, "booking")
+	assert.Contains(t, bookingAgent.AllowedTools, "get_available_slots")
+	assert.Contains(t, bookingAgent.AllowedTools, "booking")
 
 	// Kiểm tra qa_agent
 	assert.Equal(t, "qa_agent", qaAgent.Name)
-	assert.Contains(t, qaAgent.Tools, "search_documents")
-	assert.Contains(t, qaAgent.Tools, "get_products")
+	assert.Contains(t, qaAgent.AllowedTools, "search_documents")
+	assert.Contains(t, qaAgent.AllowedTools, "get_products")
 }
 
 func TestLoadAppConfig(t *testing.T) {

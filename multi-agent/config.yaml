@@ -15,7 +15,8 @@ agents:
 
       Sử dụng các Tool từ mcp-server để tra cứu khung giờ trống, stylist và thực hiện tạo/hủy booking.
     
-    tools: ["get_available_slots", "cancel_booking", "search_products", "booking"]
+    allowedTools: ["get_available_slots", "cancel_booking", "search_products", "booking"]
+    approvedTools: ["booking", "cancel_booking"]
   
   qa_agent: 
     name: qa_agent
@@ -33,10 +34,17 @@ agents:
 
       Sử dụng các Tool từ mcp-server để tra cứu khung giờ trống, stylist và thực hiện tạo/hủy booking.
     
-    tools: ["search_documents", "get_products", "get_branches", "get_stylists"]
+    allowedTools: ["search_documents", "get_products", "get_branches", "get_stylists"]
+    approvedTools: []
+  orschestrator_agent: 
+    name: orschestrator_agent
+    description: 
+    instruction: 
 
 models: 
   gemini: gemini-flash-2.5
   openai: openai-4o-mini
+  ollama: qwen2.5:3b
 
 mcp_server: http://localhost:8081
+ollama_server: http://localhost:11434
