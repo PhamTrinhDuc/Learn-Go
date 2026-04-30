@@ -11,8 +11,10 @@ import (
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/propagation"
 	"go.opentelemetry.io/otel/trace"
 )
 
@@ -72,7 +74,7 @@ func tracingMiddleware(telemetry *observability.Telemetry) mcp.Middleware {
 	}
 }
 
-func NewSSEHandler(db database.Store, telemetry *observability.Telemetry) http.Handler {
+func NewSSEHandler(db database.Store, telemetry *observability.Telemetry, backendURL string) http.Handler {
 	s := mcp.NewServer(
 		&mcp.Implementation{
 			Name:    "a2a-mcp-server",
@@ -86,48 +88,38 @@ func NewSSEHandler(db database.Store, telemetry *observability.Telemetry) http.H
 
 	searchTool := tools.NewSearchTool(db)
 	hybridTool := tools.NewHybridSearchTool(db)
+	stylistTool := tools.NewStylistTool(backendURL)
+	branchTool := tools.NewBranchTool(backendURL)
 
+	// Search document
 	mcp.AddTool(s, searchTool.Definition(), searchTool.Handler)
 	mcp.AddTool(s, hybridTool.Definition(), hybridTool.Handler)
 
-	return mcp.NewSSEHandler(func(r *http.Request) *mcp.Server {
+	// API Stylist
+	mcp.AddTool(s, stylistTool.ListStylistDefinition(), stylistTool.ListStylistHandler)
+	mcp.AddTool(s, stylistTool.GetStylistDefinition(), stylistTool.GetStylistHandler)
+
+	// API Branch
+	mcp.AddTool(s, branchTool.ListBranchDefinition(), branchTool.ListBranchHandler)
+	mcp.AddTool(s, branchTool.GetBranchDefinition(), branchTool.GetBranchHandler)
+
+	sseHandler := mcp.NewSSEHandler(func(r *http.Request) *mcp.Server {
 		return s
 	}, nil)
+
+	// Wrap để propagate span từ Gin vào MCP
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// r.Context() tại đây đã có span của Gin (vì gin đã set WithContext)
+		// nhưng cần inject vào MCP session context thông qua propagator
+		ctx := r.Context()
+		propagator := otel.GetTextMapPropagator()
+
+		// Re-inject span vào header để MCP SDK extract được
+		propagator.Inject(ctx, propagation.HeaderCarrier(r.Header))
+
+		sseHandler.ServeHTTP(w, r)
+	})
 }
-
-// func NewSSEHandler(db database.Store, telemetry *observability.Telemetry) http.Handler {
-// 	s := mcp.NewServer(
-// 		&mcp.Implementation{
-// 			Name:    "a2a-mcp-server",
-// 			Version: "1.0.0",
-// 		},
-// 		nil,
-// 	)
-//     s.AddReceivingMiddleware(tracingMiddleware(telemetry))
-
-// 	searchTool := tools.NewSearchTool(db)
-// 	hybridTool := tools.NewHybridSearchTool(db)
-
-// 	mcp.AddTool(s, searchTool.Definition(), searchTool.Handler)
-// 	mcp.AddTool(s, hybridTool.Definition(), hybridTool.Handler)
-
-//     sseHandler := mcp.NewSSEHandler(func(r *http.Request) *mcp.Server {
-//         return s
-//     }, nil)
-
-//     // Wrap để propagate span từ Gin vào MCP
-//     return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-//         // r.Context() tại đây đã có span của Gin (vì gin đã set WithContext)
-//         // nhưng cần inject vào MCP session context thông qua propagator
-//         ctx := r.Context()
-//         propagator := otel.GetTextMapPropagator()
-
-//         // Re-inject span vào header để MCP SDK extract được
-//         propagator.Inject(ctx, propagation.HeaderCarrier(r.Header))
-
-//         sseHandler.ServeHTTP(w, r)
-//     })
-// }
 
 // func NewStreamableHTTPHandler(db database.Store, telemetry *observability.Telemetry) http.Handler {
 // 	s := mcp.NewServer(

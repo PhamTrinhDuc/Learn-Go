@@ -179,10 +179,11 @@ func (db *DB) InsertDocuments(ctx context.Context, docs []*KnowledgeBase) error 
 	valueStrings := make([]string, 0, len(docs))
 	valueArgs := make([]interface{}, 0, len(docs)*5) // 5 fields per row
 	index := 1
+	numCols := 4
 
 	for _, doc := range docs {
-		placeholders := make([]string, 5)
-		for i := 0; i < 5; i++ {
+		placeholders := make([]string, numCols)
+		for i := 0; i < numCols; i++ {
 			placeholders[i] = fmt.Sprintf("$%d", index)
 			index++
 		}
@@ -194,7 +195,6 @@ func (db *DB) InsertDocuments(ctx context.Context, docs []*KnowledgeBase) error 
 		}
 
 		valueArgs = append(valueArgs,
-			doc.BranchId,
 			doc.Title,
 			doc.Content,
 			doc.Metadata,
@@ -204,7 +204,7 @@ func (db *DB) InsertDocuments(ctx context.Context, docs []*KnowledgeBase) error 
 
 	// 2. Ghép nối câu query hoàn chỉnh
 	query := fmt.Sprintf(`
-		INSERT INTO knowledge_base (branch_id, title, content, metadata, embedding)
+		INSERT INTO knowledge_base (title, content, metadata, embedding)
 		VALUES %s
 		RETURNING id, created_at, updated_at`,
 		strings.Join(valueStrings, ","),

@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	"regexp"
 
@@ -134,9 +135,11 @@ func convertToDocumentFormat(docs []schema.Document) ([]*database.KnowledgeBase,
 	for _, doc := range docs {
 		// Khởi tạo struct mới
 		formattedDoc := &database.KnowledgeBase{
-			ID:       uuid.New(),
-			Content:  doc.PageContent,
-			Metadata: doc.Metadata,
+			ID:        uuid.New(),
+			Content:   doc.PageContent,
+			Metadata:  doc.Metadata,
+			CreatedAt: time.Now(),
+			UpdatedAt: time.Now(),
 		}
 
 		// Ép kiểu metadata["source"] về string

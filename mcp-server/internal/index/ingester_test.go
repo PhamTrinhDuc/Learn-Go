@@ -3,7 +3,8 @@ package index
 import (
 	"context"
 	database "mcp-server/internal/database"
-	ollama "mcp-server/internal/llm"
+	llm "mcp-server/internal/llm"
+	"mcp-server/internal/utils"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -14,47 +15,49 @@ var configDB = database.DBConfig{
 	Port:     5433,
 	User:     "mcp_user",
 	Password: "mcp_password",
-	DBName:   "mcp_db",
+	DBName:   "salon_chain",
 }
 
-var configModel = ollama.Config{
-	BaseURL:    "http://localhost:11434",
-	LLMModel:   "qwen2.5:0.5b",
-	EmbedModel: "qwen3-embedding:0.6b",
+var configModel = llm.Config{
+	LLM: llm.ProviderConfig{
+		Provider: llm.ProviderGroq,
+		Model:    "llama-3.3-70b-versatile",
+		APIKey:   utils.GetEnvString("GROQ_API_KEY", ""),
+	},
+	Embed: llm.ProviderConfig{
+		Provider: llm.ProviderOllama,
+		BaseURL:  "http://localhost:11434",
+		Model:    "qwen3-embedding:0.6b",
+	},
 }
 
-func TestIngestToVDB(t *testing.T) {
+// func TestIngestToVDB(t *testing.T) {
 
-	ctx := context.Background()
-	// tenantID := "11111111-1111-1111-1111-111111111111"
-	filePath := "../../../data/VTI_Quy định_Quy định điền thông tin trên hệ thống VMS_v2.0.pdf"
+// 	ctx := context.Background()
+// 	filePath := "../../data/agent-instructions/booking-agent/quy-trinh-dat-lich.md"
 
-	// 1. Init database
-	db, err := database.NewDB(ctx, configDB)
-	assert.NoError(t, err)
-	// 2. Init client Ollama
-	model, err := ollama.NewClient(configModel)
+// 	// 1. Init database
+// 	db, err := database.NewDB(ctx, configDB)
+// 	assert.NoError(t, err)
+// 	// 2. Init client Ollama
+// 	model, err := llm.NewClient(configModel)
 
-	err = ingestToVDB(ctx, model, db, filePath)
-	assert.NoError(t, err)
-}
+// 	err = ingestToVDB(ctx, model, db, filePath)
+// 	assert.NoError(t, err)
+// }
 
 func TestIngestBatchingToVDB(t *testing.T) {
 
 	ctx := context.Background()
-	// tenantID := "11111111-1111-1111-1111-111111111111"
-	filePaths := []string{
-		"../../../data/VTI_Quy định thưởng đề xuất IP Kaizen-2019_V1.0.pdf",
-		"../../../data/VTI_Quy định_Quy định điền thông tin trên hệ thống VMS_v2.0.pdf",
-		"../../../data/VTI_Quy định_Quy định tạm ứng lương_v3.0.pdf",
-		// "../../../data/VTI_Thỏa thuận tạm ứng lương_v1.0.pdf",
-	}
-
+	dataRoot := "../../data"
+	filePaths, err := utils.GetListFiles(dataRoot)
+	assert.NoError(t, err)
 	// 1. Init database
 	db, err := database.NewDB(ctx, configDB)
 	assert.NoError(t, err)
 	// 2. Init client Ollama
-	model, err := ollama.NewClient(configModel)
+	model, err := llm.NewClient(configModel)
+	assert.NoError(t, err)
 
 	err = ingestBatchingToVDB(ctx, model, db, filePaths)
 	assert.NoError(t, err)

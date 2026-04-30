@@ -1,8 +1,12 @@
 package utils
 
 import (
+	"fmt"
+	"io/fs"
 	"os"
+	"path/filepath"
 	"strconv"
+	"strings"
 )
 
 // GetEnvString lấy giá trị string từ biến môi trường, nếu không có thì dùng mặc định
@@ -51,4 +55,29 @@ func GetEnvFloat(key string, defaultValue float64) float64 {
 		return defaultValue
 	}
 	return float64(value)
+}
+
+// Sửa GetListFiles để trả về danh sách file []string
+func GetListFiles(data_path string) ([]string, error) {
+	var data_paths []string
+
+	// Callback chỉ được phép trả về duy nhất 1 giá trị là error
+	err := filepath.WalkDir(data_path, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+
+		if !d.IsDir() && strings.ToLower(filepath.Ext(path)) == ".md" {
+			fmt.Printf("Đang đọc file: %s\n", path)
+			data_paths = append(data_paths, path)
+		}
+
+		return nil // Trả về nil nếu thành công
+	})
+
+	if err != nil {
+		return nil, err
+	}
+
+	return data_paths, nil
 }

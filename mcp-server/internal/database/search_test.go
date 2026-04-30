@@ -2,7 +2,7 @@ package database
 
 import (
 	"context"
-	ollama "mcp-server/internal/llm"
+	llm "mcp-server/internal/llm"
 	utils "mcp-server/internal/utils"
 	"sync"
 	"testing"
@@ -17,18 +17,29 @@ func getTestDBConfig() DBConfig {
 		Port:     utils.GetEnvInt("DB_PORT", 5433),
 		User:     utils.GetEnvString("DB_USER", "app_user"), // Use app_user for RLS enforcement
 		Password: utils.GetEnvString("DB_PASSWORD", "mcp_password"),
-		DBName:   utils.GetEnvString("DB_NAME", "mcp_db"),
+		DBName:   utils.GetEnvString("DB_NAME", "salon_chain"),
 		SSLMode:  utils.GetEnvString("DB_SSLMODE", "disable"),
 		MaxConns: int32(utils.GetEnvInt("MAX_CONNS", 10)),
 		MinConns: int32(utils.GetEnvInt("MAX_CONNS", 2)),
 	}
 }
 
-func getTestModelConfig() ollama.Config {
-	return ollama.Config{
-		BaseURL:    utils.GetEnvString("OLLAMA_URL", "http://localhost:11434"),
-		LLMModel:   utils.GetEnvString("LLM_MODEL", "qwen2.5:0.5b"),
-		EmbedModel: utils.GetEnvString("EMBED_MODEL", "qwen3-embedding:0.6b"),
+func getTestModelConfig() llm.Config {
+	provider := llm.Provider(utils.GetEnvString("LLM_PROVIDER", "ollama"))
+	apiKey := utils.GetEnvString("LLM_API_KEY", "")
+	return llm.Config{
+		LLM: llm.ProviderConfig{
+			Provider: provider,
+			BaseURL:  utils.GetEnvString("OLLAMA_URL", "http://localhost:11434"),
+			APIKey:   apiKey,
+			Model:    utils.GetEnvString("LLM_MODEL", "qwen2.5:0.5b"),
+		},
+		Embed: llm.ProviderConfig{
+			Provider: provider,
+			BaseURL:  utils.GetEnvString("OLLAMA_URL", "http://localhost:11434"),
+			APIKey:   apiKey,
+			Model:    utils.GetEnvString("EMBED_MODEL", "qwen3-embedding:0.6b"),
+		},
 	}
 }
 

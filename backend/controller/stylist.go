@@ -2,21 +2,27 @@ package controller
 
 import (
 	"backend/domain"
+	"backend/internal/observability"
 	"backend/internal/utils"
 
 	"github.com/gin-gonic/gin"
 	"github.com/go-playground/validator/v10"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 )
 
 type StylistController struct {
-	usecase  domain.StylistUsecase
-	validate *validator.Validate
+	usecase   domain.StylistUsecase
+	validate  *validator.Validate
+	telemetry *observability.Telemetry
 }
 
-func NewStylistController(usecase domain.StylistUsecase) *StylistController {
+func NewStylistController(usecase domain.StylistUsecase, telemetry *observability.Telemetry) *StylistController {
 	return &StylistController{
-		usecase:  usecase,
-		validate: validator.New(),
+		usecase:   usecase,
+		validate:  validator.New(),
+		telemetry: telemetry,
 	}
 }
 
@@ -97,8 +103,25 @@ func (c *StylistController) List(ctx *gin.Context) {
 	page := utils.GetQueryInt(ctx, "page", 1)
 	limit := utils.GetQueryInt(ctx, "limit", 10)
 
-	result, err := c.usecase.List(ctx.Request.Context(), page, limit)
+	reqCtx, span := c.telemetry.Tracer.Start(
+		ctx.Request.Context(),
+		"StylistController.List", // Tên Span nên rõ ràng
+		trace.WithAttributes(
+			attribute.String("http.method", ctx.Request.Method),
+			attribute.String("http.path", ctx.Request.URL.Path),
+			attribute.Int("pagination.page", page),
+			attribute.Int("pagination.limit", limit),
+		),
+	)
+	defer span.End()
+
+	result, err := c.usecase.List(reqCtx, page, limit)
 	if err != nil {
+		utils.RespondError(ctx, err)
+		// Record lỗi vào Span để debug trên Jaeger
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
+
 		utils.RespondError(ctx, err)
 		return
 	}

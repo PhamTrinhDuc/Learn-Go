@@ -1,9 +1,10 @@
-package ollama
+package llm
 
 import (
 	"context"
 	"fmt"
 	"log"
+	"mcp-server/internal/utils"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -13,7 +14,18 @@ func TestAIService(t *testing.T) {
 	ctx := context.Background()
 
 	// 1. Khởi tạo client với cấu hình mặc định (qwen2.5 & qwen3-embedding)
-	client, err := NewClient(DefaultConfig())
+	client, err := NewClient(Config{
+		LLM: ProviderConfig{
+			Provider: ProviderGroq,
+			Model:    "llama-3.3-70b-versatile",
+			APIKey:   utils.GetEnvString("GROQ_API_KEY", ""),
+		},
+		Embed: ProviderConfig{
+			Provider: ProviderOllama,
+			BaseURL:  "http://localhost:11434",
+			Model:    "qwen3-embedding:0.6b",
+		},
+	})
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -27,8 +39,8 @@ func TestAIService(t *testing.T) {
 	}, "Not found vector embedding")
 
 	// 3. Test thử Chat LLM
-	fmt.Println("[*] Đang hỏi Qwen2.5...")
-	resp, err := client.Chat(ctx, "Chào bạn.")
+	fmt.Println("[*] Đang hỏi LLM...")
+	resp, err := client.Chat(ctx, "Chào bác, bác làm được gì?")
 	fmt.Println(resp)
 	assert.NoError(t, err)
 	assert.Condition(t, func() (success bool) {

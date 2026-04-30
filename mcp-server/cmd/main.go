@@ -36,6 +36,7 @@ type Config struct {
 	Telemetry     observability.Config
 	EnableTracing bool
 	EnableMetrics bool
+	BackendURL    string
 }
 
 func loadConfig() Config {
@@ -69,6 +70,7 @@ func loadConfig() Config {
 			EnableTracing:  utils.GetEnvBool("OTEL_ENABLE_TRACING", true),
 			EnableMetrics:  utils.GetEnvBool("OTEL_ENABLE_METRICS", true),
 		},
+		BackendURL: utils.GetEnvString("BACKEND_URL", "http://localhost:8080/api/v1"),
 	}
 }
 
@@ -148,7 +150,7 @@ func main() {
 	}
 
 	// 4. MCP Endpoint with Gin
-	mcpHandler := server.NewSSEHandler(db, telemetry)
+	mcpHandler := server.NewSSEHandler(db, telemetry, cfg.BackendURL)
 
 	mcpGroup := r.Group("/mcp")
 	mcpGroup.Use(

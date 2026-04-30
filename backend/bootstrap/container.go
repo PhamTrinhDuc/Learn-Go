@@ -3,6 +3,7 @@ package bootstrap
 
 import (
 	"backend/controller"
+	"backend/internal/observability"
 	"backend/repository"
 	"backend/usecase"
 
@@ -26,7 +27,7 @@ type Container struct {
 	StylistCtl *controller.StylistController
 }
 
-func NewContainer(pool *pgxpool.Pool) *Container {
+func NewContainer(pool *pgxpool.Pool, telemetry *observability.Telemetry) *Container {
 	// Repositories
 	branchRepo := repository.NewBranchRepository(pool)
 	userRepo := repository.NewUserRepository(pool)
@@ -40,7 +41,7 @@ func NewContainer(pool *pgxpool.Pool) *Container {
 	// Controllers
 	branchCtl := controller.NewBranchController(branchUC)
 	userCtl := controller.NewUserController(userUC)
-	stylistCtl := controller.NewStylistController(stylistUC)
+	stylistCtl := controller.NewStylistController(stylistUC, telemetry)
 
 	return &Container{
 		BranchRepo:  branchRepo,

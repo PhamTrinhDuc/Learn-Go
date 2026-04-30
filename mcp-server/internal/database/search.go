@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/google/uuid"
 	"github.com/pgvector/pgvector-go"
 )
 
@@ -16,12 +17,14 @@ type VectorSearchResult struct {
 
 // FullTextSearchResult holds params for full text search
 type FullTextSearchResult struct {
-	Document KnowledgeBase
+	Document  KnowledgeBase
+	BM25Score float64
 }
 
 // HybridSearchParams holds parameters for hybrid search
 type HybridSearchParams struct {
 	Query        string
+	BranchID     uuid.UUID
 	Embedding    []float32
 	Limit        int
 	BM25Weight   float64 // Weight for lexical search (0.0 to 1.0)
@@ -86,15 +89,17 @@ func (db *DB) VectorSearch(ctx context.Context, embedding []float32, limit int) 
 }
 
 func (db *DB) FullTextSearch(ctx context.Context, query string, limit int) ([]*FullTextSearchResult, error) {
+	if limit <= 0 {
+		limit = 10
+	}
+
 	queryString := `
 		SELECT
 			id, branch_id, title, content, metadata, created_at, updated_at,
-			ts_rank_cd(
-				to_tsvector('simple', f_unaccent(title || ' ' || content)),
-				plainto_tsquery('simple', f_unaccent($1))
-			) AS bm25_score
+			search_text <@> $1::text AS bm25_score
 		FROM knowledge_base
-		WHERE is_active = TRUE AND to_tsvector('simple', f_unaccent(title || ' ' || content)) @@ websearch_to_tsquery('simple', f_unaccent($1))
+		WHERE is_active = TRUE
+		  AND (search_text <@> $1::text) > 0
 		ORDER BY bm25_score DESC
 		LIMIT $2
 	`
@@ -120,58 +125,66 @@ func (db *DB) FullTextSearch(ctx context.Context, query string, limit int) ([]*F
 			&doc.UpdatedAt,
 			&score,
 		)
-
 		if err != nil {
-			return nil, fmt.Errorf("failed to scan documents: %w", err)
+			return nil, fmt.Errorf("failed to scan fulltext search result: %w", err)
 		}
+
 		results = append(results, &FullTextSearchResult{
-			Document: *doc,
+			Document:  *doc,
+			BM25Score: score,
 		})
 	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("rows iteration error: %w", err)
+	}
+
 	return results, nil
 }
 
 // This implements a Reciprocal Rank Fusion (RRF) approach for combining results
 func (db *DB) HybridSearch(ctx context.Context, params HybridSearchParams) ([]HybridSearchResult, error) {
-	// Normalize weights if they don't sum to 1.0
-	totalWeight := params.BM25Weight + params.VectorWeight
-	if totalWeight == 0 {
-		params.BM25Weight = 0.5
-		params.VectorWeight = 0.5
-		totalWeight = 1.0
-	}
-	bm25Weight := params.BM25Weight / totalWeight
-	vectorWeight := params.VectorWeight / totalWeight
-
 	if params.Limit <= 0 {
 		params.Limit = 10
 	}
 
+	// Default weights nếu không được cung cấp
+	if params.BM25Weight == 0 && params.VectorWeight == 0 {
+		params.BM25Weight = 1.0
+		params.VectorWeight = 1.0
+	}
+
 	query := `
-		WITH bm25_results AS (
-			SELECT
+		WITH 
+		-- 1. BM25 Search using pg_textsearch
+		bm25_results AS (
+			SELECT 
 				id, branch_id, title, content, metadata, embedding, created_at, updated_at,
-				ts_rank_cd(
-					to_tsvector('simple', f_unaccent(title || ' ' || content)),
-					plainto_tsquery('simple', f_unaccent($1))
-				) AS bm25_score,
-				ROW_NUMBER() OVER (ORDER BY ts_rank_cd(
-					to_tsvector('simple', f_unaccent(title || ' ' || content)),
-					websearch_to_tsquery('simple', f_unaccent($1))
-				) DESC) AS bm25_rank
+				ROW_NUMBER() OVER (ORDER BY search_text <@> $1::text) AS bm25_rank
 			FROM knowledge_base
-			WHERE is_active = TRUE AND to_tsvector('simple', f_unaccent(title || ' ' || content)) @@ websearch_to_tsquery('simple', f_unaccent($1))
+			WHERE is_active = TRUE
+			  	AND (branch_id = $3 OR branch_id IS NULL OR $3 IS NULL)
+			   	AND (search_text <@> $1::text) > 0
+			ORDER BY search_text <@> $1::text
+			LIMIT 50
 		),
+
+		-- 2. Vector Search
 		vector_results AS (
-			SELECT
+			SELECT 
 				id, branch_id, title, content, metadata, embedding, created_at, updated_at,
-				1 - (embedding <=> $2) AS vector_score,
 				ROW_NUMBER() OVER (ORDER BY embedding <=> $2) AS vector_rank
 			FROM knowledge_base
-			WHERE is_active = TRUE AND embedding IS NOT NULL
+			WHERE is_active = TRUE 
+			  AND embedding IS NOT NULL
+			  AND (branch_id = $3 OR branch_id IS NULL OR $3 IS NULL)
+			ORDER BY embedding <=> $2
+			LIMIT 50
 		),
-		combined AS (
-			SELECT
+
+		-- 3. Fusion với Reciprocal Rank Fusion
+		fused AS (
+			SELECT 
 				COALESCE(b.id, v.id) AS id,
 				COALESCE(b.branch_id, v.branch_id) AS branch_id,
 				COALESCE(b.title, v.title) AS title,
@@ -180,41 +193,41 @@ func (db *DB) HybridSearch(ctx context.Context, params HybridSearchParams) ([]Hy
 				COALESCE(b.embedding, v.embedding) AS embedding,
 				COALESCE(b.created_at, v.created_at) AS created_at,
 				COALESCE(b.updated_at, v.updated_at) AS updated_at,
-				COALESCE(b.bm25_score, 0) AS bm25_score,
-				COALESCE(v.vector_score, 0) AS vector_score,
-				-- Reciprocal Rank Fusion score
-				(
-					COALESCE(1.0 / (60 + b.bm25_rank), 0) * $3 +
-					COALESCE(1.0 / (60 + v.vector_rank), 0) * $4
-				) AS combined_score
+				
+				COALESCE(1.0 / (60 + b.bm25_rank), 0) * $4 +
+				COALESCE(1.0 / (60 + v.vector_rank), 0) * $5 AS combined_score,
+
+				COALESCE(b.bm25_rank, 999) AS bm25_rank,
+				COALESCE(v.vector_rank, 999) AS vector_rank
 			FROM bm25_results b
 			FULL OUTER JOIN vector_results v ON b.id = v.id
-			WHERE
-				COALESCE(b.bm25_score, 0) >= $5
-				OR COALESCE(v.vector_score, 0) >= $6
 		)
-		SELECT
+
+		SELECT 
 			id, branch_id, title, content, metadata, embedding,
 			created_at, updated_at,
-			bm25_score, vector_score, combined_score
-		FROM combined
+			(1.0 / (60 + bm25_rank)) AS bm25_score,     -- approximate score
+			(1.0 / (60 + vector_rank)) AS vector_score,
+			combined_score
+		FROM fused
 		ORDER BY combined_score DESC
-		LIMIT $7
+		LIMIT $6
 	`
 
 	var embedding interface{}
 	if params.Embedding != nil {
 		embedding = pgvector.NewVector(params.Embedding)
+	} else {
+		embedding = nil
 	}
 
 	rows, err := db.pool.Query(ctx, query,
-		params.Query,
-		embedding,
-		bm25Weight,
-		vectorWeight,
-		params.MinBM25Score,
-		params.MinVectorSim,
-		params.Limit,
+		params.Query,        // $1: text query cho BM25
+		embedding,           // $2: embedding
+		params.BranchID,     // $3: branch filter (UUID hoặc nil)
+		params.BM25Weight,   // $4: trọng số BM25
+		params.VectorWeight, // $5: trọng số Vector
+		params.Limit,        // $6
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to perform hybrid search: %w", err)
@@ -225,7 +238,7 @@ func (db *DB) HybridSearch(ctx context.Context, params HybridSearchParams) ([]Hy
 	for rows.Next() {
 		var doc KnowledgeBase
 		var bm25Score, vectorScore, combinedScore float64
-		var dbEmbedding *pgvector.Vector // Use pointer to handle NULL
+		var dbEmbedding *pgvector.Vector
 
 		err := rows.Scan(
 			&doc.ID,
@@ -244,7 +257,7 @@ func (db *DB) HybridSearch(ctx context.Context, params HybridSearchParams) ([]Hy
 			return nil, fmt.Errorf("failed to scan hybrid search result: %w", err)
 		}
 
-		if dbEmbedding != nil && dbEmbedding.Slice() != nil {
+		if dbEmbedding != nil {
 			doc.Embedding = dbEmbedding.Slice()
 		}
 
@@ -255,5 +268,14 @@ func (db *DB) HybridSearch(ctx context.Context, params HybridSearchParams) ([]Hy
 			CombinedScore: combinedScore,
 		})
 	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("rows iteration error: %w", err)
+	}
+
+	if len(results) <= 0 {
+		fmt.Println("WARNING: Not found documents!")
+	}
+
 	return results, nil
 }

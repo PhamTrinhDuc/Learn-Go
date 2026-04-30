@@ -5,6 +5,10 @@
 
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 CREATE EXTENSION IF NOT EXISTS vector;
+CREATE EXTENSION IF NOT EXISTS unaccent;
+-- Dùng extension BM25 thực thụ (tốt hơn ts_rank rất nhiều)
+-- Option A: pg_textsearch (Timescale/TigerData)
+CREATE EXTENSION IF NOT EXISTS pg_textsearch;  
 
 -- ============================================================
 -- NHÓM 1: CẤU TRÚC CỬA HÀNG
@@ -283,7 +287,108 @@ CREATE INDEX idx_notify_user_type      ON notify_log(user_id, type, sent_at);
 CREATE INDEX idx_agent_log_status      ON agent_action_log(status)
     WHERE status = 'pending_approval';
 
--- Knowledge base vector search
-CREATE INDEX idx_kb_embedding          ON knowledge_base
-    USING ivfflat (embedding vector_cosine_ops)
-    WITH (lists = 100);
+-- ============================================================
+-- INDEXES CHO KNOWLEDGE BASE - HYBRID SEARCH (BM25 + Vector)
+-- ============================================================
+
+-- BM25 Index sử dụng pg_textsearch (rất quan trọng)
+-- 1. Thêm cột gộp (nếu chưa có trong định nghĩa bảng). BM25 chỉ cho index 1 cột nên tạo cột mới gồm title và content
+ALTER TABLE knowledge_base 
+ADD COLUMN IF NOT EXISTS search_text TEXT 
+GENERATED ALWAYS AS (title || ' ' || content) STORED;
+
+-- 2. Tạo Index trên cột đơn này
+DROP INDEX IF EXISTS idx_kb_bm25;
+CREATE INDEX idx_kb_bm25 
+    ON knowledge_base 
+    USING bm25(search_text) 
+    WITH (text_config = 'simple');
+
+-- Vector Index (HNSW tốt hơn IVFFlat cho cosine)
+CREATE INDEX idx_kb_embedding 
+    ON knowledge_base 
+    USING hnsw (embedding vector_cosine_ops)
+    WITH (m = 16, ef_construction = 64);
+
+-- Index hỗ trợ filter nhanh
+CREATE INDEX idx_kb_branch_active 
+    ON knowledge_base (branch_id, is_active);
+
+CREATE INDEX idx_kb_category 
+    ON knowledge_base (category) WHERE is_active = TRUE;
+
+
+-- ============================================================
+-- HÀM HỖ TRỢ UNACCENT CHO TIẾNG VIỆT
+-- ============================================================
+CREATE OR REPLACE FUNCTION public.f_unaccent(text)
+  RETURNS text AS
+$func$
+SELECT public.unaccent('public.unaccent', $1)
+$func$ LANGUAGE sql IMMUTABLE;
+
+-- ============================================================
+-- HYBRID SEARCH FUNCTION (BM25 + Vector + RRF)
+-- ============================================================
+CREATE OR REPLACE FUNCTION hybrid_search_kb(
+    search_query     TEXT,
+    query_embedding  VECTOR(1024),
+    top_k            INT DEFAULT 10,
+    rrf_k            INT DEFAULT 60,
+    branch_uuid      UUID DEFAULT NULL
+)
+RETURNS TABLE (
+    id           UUID,
+    title        TEXT,
+    content      TEXT,
+    score        FLOAT,
+    bm25_rank    INT,
+    vector_rank  INT
+)
+LANGUAGE sql
+STABLE
+AS $$
+WITH 
+bm25_results AS (
+    SELECT 
+        id,
+        ROW_NUMBER() OVER (ORDER BY (title || ' ' || content) <@> search_query) AS bm25_rank
+    FROM knowledge_base
+    WHERE is_active = TRUE
+      AND (branch_uuid IS NULL OR branch_id = branch_uuid OR branch_id IS NULL)
+    ORDER BY (title || ' ' || content) <@> search_query
+    LIMIT 50
+),
+vector_results AS (
+    SELECT 
+        id,
+        ROW_NUMBER() OVER (ORDER BY embedding <=> query_embedding) AS vector_rank
+    FROM knowledge_base
+    WHERE is_active = TRUE 
+      AND embedding IS NOT NULL
+      AND (branch_uuid IS NULL OR branch_id = branch_uuid OR branch_id IS NULL)
+    ORDER BY embedding <=> query_embedding
+    LIMIT 50
+),
+fused AS (
+    SELECT 
+        COALESCE(b.id, v.id) AS id,
+        COALESCE(1.0 / (rrf_k::float + b.bm25_rank), 0) + 
+        COALESCE(1.0 / (rrf_k::float + v.vector_rank), 0) AS score,
+        b.bm25_rank,
+        v.vector_rank
+    FROM bm25_results b
+    FULL OUTER JOIN vector_results v ON b.id = v.id
+)
+SELECT 
+    k.id,
+    k.title,
+    k.content,
+    f.score,
+    f.bm25_rank,
+    f.vector_rank
+FROM fused f
+JOIN knowledge_base k ON k.id = f.id
+ORDER BY f.score DESC
+LIMIT top_k;
+$$;

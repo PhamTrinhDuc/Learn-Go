@@ -2,7 +2,6 @@ package middleware
 
 import (
 	"backend/internal/auth"
-	"backend/internal/utils"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
@@ -20,7 +19,7 @@ func (m *AuthMiddleware) Handler() gin.HandlerFunc {
 	return func(ctx *gin.Context) {
 		authHeader := ctx.GetHeader("Authorization")
 		if authHeader == "" {
-			ctx.JSON(http.StatusUnauthorized, utils.HTTPResponse{Error: "Authorization header required"})
+			ctx.JSON(http.StatusUnauthorized, gin.H{"error": "Authorization header required"})
 			ctx.Abort()
 			return
 		}
@@ -28,7 +27,7 @@ func (m *AuthMiddleware) Handler() gin.HandlerFunc {
 		// Extract token from "Bearer <token>"
 		tokenString, err := auth.ExtractTokenFromHeader(authHeader)
 		if err != nil {
-			ctx.JSON(http.StatusUnauthorized, utils.HTTPResponse{Error: err.Error()})
+			ctx.JSON(http.StatusUnauthorized, gin.H{"error": err.Error()})
 			ctx.Abort()
 			return
 		}
@@ -36,7 +35,7 @@ func (m *AuthMiddleware) Handler() gin.HandlerFunc {
 		// Validate token
 		claims, err := auth.ValidateToken(tokenString)
 		if err != nil {
-			ctx.JSON(http.StatusUnauthorized, utils.HTTPResponse{Error: "Invalid token: " + err.Error()})
+			ctx.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid token: " + err.Error()})
 			ctx.Abort()
 			return
 		}
@@ -78,7 +77,7 @@ func (m *AuthMiddleware) RequireRole(requiredRoles ...string) gin.HandlerFunc {
 	return func(ctx *gin.Context) {
 		roleVal, exists := ctx.Get(string(auth.ContextKeyRole))
 		if !exists {
-			ctx.JSON(http.StatusUnauthorized, utils.HTTPResponse{Error: "User role not found"})
+			ctx.JSON(http.StatusUnauthorized, gin.H{"error": "User role not found"})
 			ctx.Abort()
 			return
 		}
@@ -93,7 +92,7 @@ func (m *AuthMiddleware) RequireRole(requiredRoles ...string) gin.HandlerFunc {
 		}
 
 		if !hasRole {
-			ctx.JSON(http.StatusForbidden, utils.HTTPResponse{Error: "Insufficient permissions"})
+			ctx.JSON(http.StatusForbidden, gin.H{"error": "Insufficient permissions"})
 			ctx.Abort()
 			return
 		}
