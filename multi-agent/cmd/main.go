@@ -9,7 +9,7 @@ import (
 	"multi-agent/internal/agents"
 	config "multi-agent/internal/config"
 	mymcp "multi-agent/internal/mcp"
-	"multi-agent/internal/provider"
+	"multi-agent/internal/provider/gemini"
 
 	"github.com/google/uuid"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -59,7 +59,7 @@ func main() {
 
 	// 2. Init Shared Resources
 	// Shared LLM model
-	llm, err := provider.NewGeminiLLM(ctx, "gemini-2.0-flash") // Sử dụng model mặc định hoặc từ config
+	llm, err := gemini.NewGeminiLLM(ctx, "gemini-2.0-flash") // Sử dụng model mặc định hoặc từ config
 	if err != nil {
 		log.Fatalf("Failed to create LLM model: %v", err)
 	}

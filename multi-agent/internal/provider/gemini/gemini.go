@@ -1,4 +1,4 @@
-package provider
+package gemini
 
 import (
 	"context"
@@ -14,10 +14,10 @@ import (
 // Hỗ trợ các model: gemini-1.5-flash, gemini-2.5-flash
 func NewGeminiLLM(ctx context.Context, modelName string) (model.LLM, error) {
 	// Lấy Google API Key từ biến môi trường
-	apiKey := utils.GetEnvString("GOOGLE_API_KEY", "")
+	apiKey := utils.GetEnvString("GEMINI_API_KEY", "")
 
 	if apiKey == "" {
-		return nil, fmt.Errorf("GOOGLE_API_KEY environment variable is not set")
+		return nil, fmt.Errorf("GEMINI_API_KEY environment variable is not set")
 	}
 
 	model, err := gemini.NewModel(ctx, modelName, &genai.ClientConfig{
