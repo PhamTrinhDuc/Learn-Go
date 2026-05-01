@@ -131,6 +131,7 @@ func main() {
 	route.SetupBranchRoutes(v1, container.BranchCtl, authMiddleware)
 	route.SetupUserRoutes(v1, container.UserCtl, authMiddleware)
 	route.SetupStylistRoutes(v1, container.StylistCtl, authMiddleware)
+	route.SetupStylistScheduleRoutes(v1, container.StylistScheduleCtl, authMiddleware)
 
 	// 6. Chạy Server
 	r.Run(":8080") // Server sẽ chạy tại http://localhost:8080

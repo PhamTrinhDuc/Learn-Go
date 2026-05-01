@@ -97,3 +97,20 @@ func SetupUserRoutes(router *gin.RouterGroup, uc *controller.UserController, aut
 		user.GET("/role/:role", authMiddleware.RequireRole(string(domain.RoleAdmin), string(domain.RoleManager)), uc.ListUsersByRole)
 	}
 }
+
+// SetupStylistScheduleRoutes sets up all stylist schedule routes
+func SetupStylistScheduleRoutes(router *gin.RouterGroup, ssc *controller.StylistScheduleController, authMiddleware *middleware.AuthMiddleware) {
+	schedule := router.Group("/stylist-schedules")
+	{
+		// Read operations
+		schedule.GET("/:id", authMiddleware.OptionalHandler(), ssc.GetByID)
+
+		// Write operations: admin/manager only
+		schedule.POST("", authMiddleware.Handler(), authMiddleware.RequireRole(string(domain.RoleAdmin), string(domain.RoleManager)), ssc.Create)
+		schedule.PUT("/:id", authMiddleware.Handler(), authMiddleware.RequireRole(string(domain.RoleAdmin), string(domain.RoleManager)), ssc.Update)
+		schedule.DELETE("/:id", authMiddleware.Handler(), authMiddleware.RequireRole(string(domain.RoleAdmin), string(domain.RoleManager)), ssc.Delete)
+	}
+
+	// Nested route for stylist schedules
+	router.GET("/stylists/:stylist_id/schedules", authMiddleware.OptionalHandler(), ssc.ListByStylistID)
+}
