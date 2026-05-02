@@ -14,14 +14,14 @@ RUN apt-get update && apt-get install -y \
 RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
 ENV PATH="/root/.cargo/bin:${PATH}"
 
-RUN git config --global http.sslVerify false
+# RUN git config --global http.sslVerify false
 RUN cd /tmp && \
     git clone --branch v0.8.1 https://github.com/pgvector/pgvector.git && \
     cd pgvector && \
     make && \
     make install
 
-RUN git config --global http.sslVerify false
+# RUN git config --global http.sslVerify false
 RUN cd /tmp && \
     git clone --branch 0.9.0 https://github.com/timescale/pgvectorscale.git && \
     cd pgvectorscale/pgvectorscale && \
@@ -29,7 +29,7 @@ RUN cd /tmp && \
     cargo pgrx init --pg18 /usr/bin/pg_config && \
     cargo pgrx install --release
 
-RUN git config --global http.sslVerify false
+# RUN git config --global http.sslVerify false
 RUN cd /tmp && \
     git clone https://github.com/timescale/pg_textsearch.git && \
     cd pg_textsearch && \
@@ -50,6 +50,6 @@ COPY --from=builder /usr/share/postgresql/18/extension/pg_textsearch--*.sql /usr
 COPY --from=builder /usr/share/postgresql/18/extension/pg_textsearch.control /usr/share/postgresql/18/extension/
 COPY --from=builder /usr/lib/postgresql/18/lib/pg_textsearch*.so /usr/lib/postgresql/18/lib/
 
-COPY --chmod=644 init-extensions.sql /docker-entrypoint-initdb.d/
+COPY --chmod=644 init-db.sql /docker-entrypoint-initdb.d/
 
 EXPOSE 5432
