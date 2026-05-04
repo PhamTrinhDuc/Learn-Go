@@ -134,7 +134,7 @@ func (t *StylistTool) ListStylistHandler(ctx context.Context, req *mcp.CallToolR
 
 	resultText := fmt.Sprintf("Found %d stylist(s):\n", len(apiResp.Data.Items))
 	for _, s := range apiResp.Data.Items {
-		resultText += fmt.Sprintf("- [%s] %s (Phone: %s, Branch: %s)\n", s.ID, s.Name, s.Phone, s.BranchID)
+		resultText += fmt.Sprintf("- %s (Phone: %s, Branch: %s)\n", s.Name, s.Phone, s.BranchID)
 	}
 
 	return &mcp.CallToolResult{}, mcp.TextContent{Text: resultText}, nil
@@ -142,7 +142,19 @@ func (t *StylistTool) ListStylistHandler(ctx context.Context, req *mcp.CallToolR
 
 func (t *StylistTool) GetStylistHandler(ctx context.Context, req *mcp.CallToolRequest, args GetStylistArgs) (*mcp.CallToolResult, any, error) {
 	apiURL := fmt.Sprintf("%s/stylists/%s", t.baseURL, args.ID)
-	resp, err := t.client.Get(apiURL)
+
+	// 1. Tạo request mới với Context
+	httpReq, err := http.NewRequestWithContext(ctx, "GET", apiURL, nil)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	// 2. Inject Trace Context vào Header
+	propagator := otel.GetTextMapPropagator()
+	propagator.Inject(ctx, propagation.HeaderCarrier(httpReq.Header))
+
+	// 3. Thực hiện gọi API
+	resp, err := t.client.Do(httpReq)
 	if err != nil {
 		return &mcp.CallToolResult{IsError: true}, mcp.TextContent{Text: fmt.Sprintf("API request failed: %v", err)}, nil
 	}

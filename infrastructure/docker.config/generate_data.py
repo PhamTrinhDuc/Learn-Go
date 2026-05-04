@@ -202,6 +202,147 @@ def main():
              "cancel_reason","source"],
             bookings)
 
+        # ── 8. PRODUCT ───────────────────────────────────────────────────────────────
+        prod_data = [
+            # --- WAX & POMADE (Retail/Both) ---
+            ("Sáp Kevin Murphy Rough Rider", "wax", 550000, 680000, "both"),
+            ("Sáp Hanz de Fuko Quicksand",   "wax", 500000, 620000, "both"),
+            ("Sáp Hanz de Fuko Claymation",  "wax", 500000, 620000, "both"),
+            ("Sáp Blumaan Cavalier Clay",    "wax", 480000, 580000, "retail"),
+            ("Sáp Blumaan Monarch Matte Paste", "wax", 480000, 580000, "retail"),
+            ("Sáp Shear Revival Northern Lights", "wax", 450000, 550000, "retail"),
+            ("Pomade Reuzel Blue (Strong Hold)", "pomade", 350000, 450000, "both"),
+            ("Pomade Reuzel Pink (Heavy Grease)", "pomade", 350000, 450000, "both"),
+            ("Pomade Reuzel Fiber",          "pomade", 350000, 450000, "both"),
+            ("Pomade Suavecito Original Hold", "pomade", 300000, 380000, "retail"),
+            ("Pomade Layrite Superhold",     "pomade", 380000, 480000, "retail"),
+
+            # --- SHAMPOO & CONDITIONER (Both/Internal) ---
+            ("Dầu gội Morris Motley Treatment", "shampoo", 850000, 1100000, "both"),
+            ("Dầu xả Morris Motley",         "conditioner", 850000, 1100000, "both"),
+            ("Dầu gội Kevin Murphy Stimulate-Me", "shampoo", 550000, 720000, "both"),
+            ("Dầu gội Tigi Bed Head (Đỏ)",   "shampoo", 320000, 450000, "retail"),
+            ("Dầu gội bưởi Thorakao 500ml",  "shampoo", 60000, 85000, "retail"),
+            ("Dầu gội công nghiệp (Can 5L)", "shampoo", 250000, 0, "internal"),
+
+            # --- PRE-STYLING & SPRAY (Retail/Both) ---
+            ("Bona Fide Texture Spray",      "pre-styling", 380000, 480000, "both"),
+            ("Sidekick By Vilain",           "pre-styling", 420000, 520000, "retail"),
+            ("Gôm xịt tóc Osis+ 3 Session",  "spray", 220000, 300000, "both"),
+            ("Gôm xịt tóc 2Vee",             "spray", 180000, 250000, "retail"),
+
+            # --- ACCESSORIES & TOOLS (Retail) ---
+            ("Lược Kent Comb A81T",          "comb", 150000, 220000, "retail"),
+            ("Lược tạo phồng Chaoba",        "comb", 40000, 70000, "retail"),
+            ("Máy sấy tóc Chaoba 2800W",     "tool", 250000, 350000, "retail"),
+            ("Dầu dưỡng râu Prospectors",    "beard-oil", 350000, 450000, "retail"),
+
+            # --- SUPPLIES (Internal Only) ---
+            ("Lưỡi dao lam Dorco (Hộp 100)", "supply", 120000, 0, "internal"),
+            ("Bột talc làm sạch cổ",         "supply", 45000, 0, "internal"),
+            ("Dung dịch sát khuẩn Barbicide", "supply", 550000, 0, "internal"),
+            ("Khăn giấy cổ (Cuộn)",          "supply", 25000, 0, "internal"),
+        ]
+        
+        products = []
+        for n, c, pi, po, ut in prod_data:
+            products.append({
+                "id": uid(), "name": n, "category": c, 
+                "price_in": pi, "price_out": po, "usage_type": ut,
+                "low_stock_threshold_retail": 5, "low_stock_threshold_internal": 3,
+                "is_active": True
+            })
+        insert_to_db(cur, "product", ["id","name","category","price_in","price_out","usage_type","low_stock_threshold_retail","low_stock_threshold_internal","is_active"], products)
+
+        # ── 9. INVENTORY ─────────────────────────────────────────────────────────────
+        inventory_rows = []
+        inventory_logs = []
+        manager_id = next(u["id"] for u in users if u["role"] == "manager")
+
+        for b_id in branch_ids:
+            for p in products:
+                # Mỗi chi nhánh nhập ngẫu nhiên số lượng
+                qty_retail = random.randint(10, 30) if p["usage_type"] in ["retail", "both"] else 0
+                qty_internal = random.randint(5, 15) if p["usage_type"] in ["internal", "both"] else 0
+                inv_id = uid()
+                
+                inventory_rows.append({
+                    "id": inv_id, "product_id": p["id"], "branch_id": b_id,
+                    "quantity_total": qty_retail + qty_internal,
+                    "quantity_retail": qty_retail,
+                    "quantity_internal": qty_internal
+                })
+                
+                # Log nhập kho ban đầu
+                inventory_logs.append({
+                    "id": uid(), "inventory_id": inv_id, "action_type": "import",
+                    "qty_change": qty_retail + qty_internal, "note": "Nhập hàng đầu kỳ",
+                    "performed_by": manager_id, "performer_role": "manager",
+                    "created_at": (now - timedelta(days=200)).strftime("%Y-%m-%d %H:%M:%S+07")
+                })
+
+        insert_to_db(cur, "inventory", ["id","product_id","branch_id","quantity_total","quantity_retail","quantity_internal"], inventory_rows)
+        
+        # ── 10. ORDERS & ORDER ITEMS ──────────────────────────────────────────────────
+        order_rows = []
+        order_item_rows = []
+        
+        # Map để trừ tồn kho thực tế khi tạo order
+        inv_map = {(r["branch_id"], r["product_id"]): r for r in inventory_rows}
+
+        for c in customers:
+            # Mỗi khách mua 0-3 đơn hàng
+            for _ in range(random.randint(0, 3)):
+                br_id = c["preferred_branch_id"]
+                order_id = uid()
+                order_date = now - timedelta(days=random.randint(1, 150))
+                
+                # Chọn ngẫu nhiên 1-3 sản phẩm (chỉ lấy loại bán lẻ)
+                retail_prods = [p for p in products if p["usage_type"] in ["retail", "both"]]
+                bought_prods = random.sample(retail_prods, k=random.randint(1, min(3, len(retail_prods))))
+                
+                total_amount = 0
+                for p in bought_prods:
+                    qty = random.randint(1, 2)
+                    price = float(p["price_out"])
+                    total_amount += price * qty
+                    
+                    order_item_rows.append({
+                        "id": uid(), "order_id": order_id, "product_id": p["id"],
+                        "quantity": qty, "unit_price": price
+                    })
+                    
+                    # Log xuất kho bán hàng
+                    inv_rec = inv_map.get((br_id, p["id"]))
+                    if inv_rec:
+                        inv_rec["quantity_retail"] -= qty
+                        inv_rec["quantity_total"] -= qty
+                        inventory_logs.append({
+                            "id": uid(), "inventory_id": inv_rec["id"], "action_type": "sale",
+                            "qty_change": -qty, "note": f"Bán hàng đơn {order_id[:8]}",
+                            "performed_by": None, "performer_role": "agent",
+                            "created_at": order_date.strftime("%Y-%m-%d %H:%M:%S+07")
+                        })
+
+                order_rows.append({
+                    "id": order_id, "user_id": c["id"], "branch_id": br_id,
+                    "total_amount": total_amount, "points_earned": int(total_amount // 10000),
+                    "payment_status": True, "payment_method": random.choice(["cash", "transfer", "momo"]),
+                    "created_at": order_date.strftime("%Y-%m-%d %H:%M:%S+07")
+                })
+
+        insert_to_db(cur, "orders", ["id","user_id","branch_id","total_amount","points_earned","payment_status","payment_method","created_at"], order_rows)
+        insert_to_db(cur, "order_items", ["id","order_id","product_id","quantity","unit_price"], order_item_rows)
+        
+        # Cập nhật lại số lượng tồn kho sau khi trừ bán hàng
+        print("Updating inventory quantities after sales...")
+        for inv in inventory_rows:
+            cur.execute("UPDATE inventory SET quantity_total = %s, quantity_retail = %s WHERE id = %s",
+                        (inv["quantity_total"], inv["quantity_retail"], inv["id"]))
+        
+        # Insert logs cuối cùng
+        insert_to_db(cur, "inventory_log", ["id","inventory_id","action_type","qty_change","note","performed_by","performer_role","created_at"], inventory_logs)
+
         conn.commit()
         print("Data seeded successfully!")
 

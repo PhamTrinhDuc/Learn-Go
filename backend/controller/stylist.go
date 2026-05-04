@@ -105,7 +105,7 @@ func (c *StylistController) List(ctx *gin.Context) {
 
 	reqCtx, span := c.telemetry.Tracer.Start(
 		ctx.Request.Context(),
-		"StylistController.List", // Tên Span nên rõ ràng
+		"StylistController.List",
 		trace.WithAttributes(
 			attribute.String("http.method", ctx.Request.Method),
 			attribute.String("http.path", ctx.Request.URL.Path),

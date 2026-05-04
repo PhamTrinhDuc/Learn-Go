@@ -6,13 +6,16 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"time"
 
 	"multi-agent/internal/agents"
 	config "multi-agent/internal/config"
 	mymcp "multi-agent/internal/mcp"
+	"multi-agent/internal/observability"
 	"multi-agent/internal/provider/gemini"
 	"multi-agent/internal/utils"
 
+	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"go.opentelemetry.io/otel"
@@ -68,21 +71,47 @@ func runAgent(ctx context.Context, runnr *runner.Runner, sessionID string, input
 	return responseText
 }
 
-func main() {
-	ctx := context.Background()
-	cfgPath := "../config.yaml"
+type ChatRequest struct {
+	SessionID string `json:"session_id"`
+	Message   string `json:"message"`
+}
 
+type ChatResponse struct {
+	SessionID string `json:"session_id"`
+	Message   string `json:"message"`
+}
+
+type AgentServer struct {
+	Runner         *runner.Runner
+	SessionService session.Service
+	Config         *config.AppConfig
+	Telemetry      *observability.Telemetry
+}
+
+func loadConfig() observability.Config {
+	return observability.Config{
+		ServiceName:    utils.GetEnvString("OTEL_SERVICE", "agent-server"),
+		ServiceVersion: utils.GetEnvString("OTEL_VERSION", "1.0.0"),
+		Environment:    utils.GetEnvString("ENVIRONMENT", "development"),
+		OTLPEndpoint:   utils.GetEnvString("OTEL_EXPORTER_OTLP_ENDPOINT", "localhost:4318"),
+		SamplingRate:   utils.GetEnvFloat("OTEL_TRACES_SAMPLER_ARG", 1.0),
+		EnableTracing:  utils.GetEnvBool("OTEL_ENABLE_TRACING", true),
+		EnableMetrics:  utils.GetEnvBool("OTEL_ENABLE_METRICS", true),
+	}
+}
+
+func NewAgentServer(ctx context.Context, cfgPath string) (*AgentServer, error) {
 	// 1. Load App Config (contains all agent definitions)
 	appCfg, err := config.LoadAppConfig(cfgPath)
 	if err != nil {
-		log.Fatalf("Failed to load app config: %v", err)
+		log.Printf("Failed to load app config: %v", err)
 	}
 
 	// 2. Init Shared Resources
 	// Shared LLM model
 	llm, err := gemini.NewGeminiLLM(ctx, "gemini-2.5-flash") // Gemini 2.0 Flash is stable
 	if err != nil {
-		log.Fatalf("Failed to create LLM model: %v", err)
+		log.Printf("Failed to create LLM model: %v", err)
 	}
 
 	mcpToken := utils.GetEnvString("AUTH_TOKEN", "")
@@ -134,7 +163,8 @@ func main() {
 
 	// Wait for all sub-agents to be ready
 	if err := g.Wait(); err != nil {
-		log.Fatalf("Sub-agent initialization failed: %v", err)
+		log.Printf("Sub-agent initialization failed: %v", err)
+		return nil, fmt.Errorf("failed to init sub-agents: %w", err)
 	}
 
 	// 4. Init orschestrator agent
@@ -143,21 +173,13 @@ func main() {
 		var err error
 		targetAgent, err = agents.NewOrscheratorAgent(ctx, &orschestratorCfg, llm, registry.GetAgents())
 		if err != nil {
-			log.Fatalf("Failed to create orschestrator agent: %v", err)
+			log.Printf("Failed to create orschestrator agent: %v", err)
+			return nil, fmt.Errorf("Failed to create orschestrator agent: %w", err)
 		}
 		log.Printf("Orschestrator agent initialized: %s", orschestratorCfg.Name)
-	} else {
-		// Fallback to any agent if orschestrator_agent is not found
-		log.Printf("Orschestrator agent not found, falling back to first available agent")
-		names := registry.ListNames()
-		if len(names) > 0 {
-			targetAgent, _ = registry.Get(names[0])
-		} else {
-			log.Fatal("No agents registered to launch")
-		}
 	}
 
-	// 5. Launch the application
+	// 5. Create session
 	sessionService := session.InMemoryService()
 	runnr, err := runner.New(runner.Config{
 		AppName:        appName,
@@ -166,21 +188,67 @@ func main() {
 		MemoryService:  memory.InMemoryService(), // Enables automatic memory persistence
 	})
 	if err != nil {
-		log.Fatalf("Failed to create runner: %v", err)
+		log.Printf("Failed to create runner: %v", err)
+		return nil, fmt.Errorf("failed to create runner: %w", err)
 	}
 
-	// 6. Create session before running
-	sessionID := uuid.NewString()
-	_, err = sessionService.Create(ctx, &session.CreateRequest{
-		UserID:    userID,
-		SessionID: sessionID,
-		AppName:   appName,
-	})
+	// 6. Init telemetry
+	cfgTelemetry := loadConfig()
+	telemetry, err := observability.NewTelemetry(ctx, cfgTelemetry)
 	if err != nil {
-		log.Fatalf("Failed to create session: %v", err)
+		log.Printf("Failed to initialize telemetry: %v", err)
 	}
 
-	userInput := "Hãy chào tôi và giới thiệu bạn là ai"
-	response := runAgent(ctx, runnr, sessionID, userInput)
-	fmt.Println("Agent Response:", response)
+	// tạo context mới để shutdown thay vì shutdown trực tiếp để tránh cancel context chính của app
+	defer func() {
+		shudownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := telemetry.Shutdown(shudownCtx); err != nil {
+			log.Printf("Error shutting down telemetry: %v", err)
+		}
+	}()
+	log.Println("OpenTelemetry initialized successfully")
+
+	return &AgentServer{Runner: runnr, SessionService: sessionService, Config: appCfg, Telemetry: telemetry}, nil
+}
+
+func (s *AgentServer) HandlerChat(c *gin.Context) {
+	var r ChatRequest
+	if err := c.ShouldBindBodyWithJSON(&r); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"Invalid request": err.Error()})
+		return
+	}
+
+	if r.SessionID == "" {
+		sessionID := uuid.NewString()
+		_, err := s.SessionService.Create(c.Request.Context(), &session.CreateRequest{
+			UserID:    userID,
+			SessionID: sessionID,
+			AppName:   appName,
+		})
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"Failed to create session ": err.Error()})
+			log.Printf("Failed to create session: %v", err)
+			return
+		}
+		r.SessionID = sessionID
+	}
+
+	userMsg := genai.NewContentFromText(r.Message, genai.RoleUser)
+
+	ctxOtel, span := s.Telemetry.Tracer.Start(c.Request.Context(), "agent.request")
+	defer span.End()
+
+	finalResponse := ""
+	for event, err := range s.Runner.Run(ctxOtel, userID, r.SessionID, userMsg, agent.RunConfig{}) {
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"Failed agent response": err.Error()})
+			log.Printf("Run error: %v", err)
+		}
+		if event.Content != nil && len(event.Content.Parts) > 0 {
+			finalResponse += event.Content.Parts[0].Text
+		}
+	}
+
+	c.JSON(http.StatusOK, ChatResponse{SessionID: r.SessionID, Message: finalResponse})
 }

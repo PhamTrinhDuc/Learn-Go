@@ -19,7 +19,7 @@ func NewGeminiLLM(ctx context.Context, modelName string) (model.LLM, error) {
 	if apiKey == "" {
 		return nil, fmt.Errorf("GEMINI_API_KEY environment variable is not set")
 	}
-
+	
 	model, err := gemini.NewModel(ctx, modelName, &genai.ClientConfig{
 		APIKey: apiKey,
 	})

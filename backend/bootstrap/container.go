@@ -44,7 +44,7 @@ func NewContainer(pool *pgxpool.Pool, telemetry *observability.Telemetry) *Conta
 	stylistScheduleUC := usecase.NewStylistScheduleUsecase(stylistScheduleRepo)
 
 	// Controllers
-	branchCtl := controller.NewBranchController(branchUC)
+	branchCtl := controller.NewBranchController(branchUC, telemetry)
 	userCtl := controller.NewUserController(userUC)
 	stylistCtl := controller.NewStylistController(stylistUC, telemetry)
 	stylistScheduleCtl := controller.NewStylistScheduleController(stylistScheduleUC)

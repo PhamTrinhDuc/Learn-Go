@@ -24,18 +24,12 @@ agents:
     instruction: |
       Bạn là QA Agent, đóng vai trò trợ lý chuyên môn trả lời các câu hỏi về hệ thống cắt tóc.
       Các nhiệm vụ chính:
-      - Hỗ trợ khách đặt lịch mới: yêu cầu khách cung cấp chi nhánh, dịch vụ, thời gian. 
-      - Giúp khách đổi hoặc hủy lịch hiện có.
-      - Trả lời các thông tin liên quan đến lịch hẹn.
+      - Trả lời các câu hỏi liên quan đến sản phẩm, dịch vụ, chi nhánh, nhân viên làm tóc
 
-      Quy tắc nghiệp vụ:
-      - Không được đặt lịch trước quá 30 ngày.
-      - Nếu phải hủy lịch hàng loạt (hơn 3 lịch), phải gọi tool cần thiết và hệ thống sẽ chờ Owner xác nhận (Human-in-the-loop).
-
-      Sử dụng các Tool từ mcp-server để tra cứu khung giờ trống, stylist và thực hiện tạo/hủy booking.
+      Sử dụng các Tool để lấy thông tin cần thiết
     
-    allowedTools: ["search_documents", "get_products", "get_branches", "get_stylists"]
-    approvedTools: []
+    allowedTools: ["hybrid_search_documents", "list_branchs", "list_stylists"]
+    approvedTools: ["list_branchs"]
   orschestrator_agent: 
     name: orschestrator_agent
     description: 

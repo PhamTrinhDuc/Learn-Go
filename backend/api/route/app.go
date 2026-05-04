@@ -104,13 +104,11 @@ func SetupStylistScheduleRoutes(router *gin.RouterGroup, ssc *controller.Stylist
 	{
 		// Read operations
 		schedule.GET("/:id", authMiddleware.OptionalHandler(), ssc.GetByID)
+		schedule.GET("/stylists/:id/schedules", authMiddleware.RequireRole(string(domain.RoleAdmin), string(domain.RoleManager)), ssc.ListByStylistID)
 
 		// Write operations: admin/manager only
 		schedule.POST("", authMiddleware.Handler(), authMiddleware.RequireRole(string(domain.RoleAdmin), string(domain.RoleManager)), ssc.Create)
 		schedule.PUT("/:id", authMiddleware.Handler(), authMiddleware.RequireRole(string(domain.RoleAdmin), string(domain.RoleManager)), ssc.Update)
 		schedule.DELETE("/:id", authMiddleware.Handler(), authMiddleware.RequireRole(string(domain.RoleAdmin), string(domain.RoleManager)), ssc.Delete)
 	}
-
-	// Nested route for stylist schedules
-	router.GET("/stylists/:stylist_id/schedules", authMiddleware.OptionalHandler(), ssc.ListByStylistID)
 }

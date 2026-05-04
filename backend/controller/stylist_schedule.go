@@ -85,7 +85,7 @@ func (c *StylistScheduleController) Delete(ctx *gin.Context) {
 
 // ListByStylistID handles GET /stylists/:stylist_id/schedules
 func (c *StylistScheduleController) ListByStylistID(ctx *gin.Context) {
-	stylistID := ctx.Param("stylist_id")
+	stylistID := ctx.Param("id")
 
 	result, err := c.usecase.ListByStylistID(ctx.Request.Context(), stylistID)
 	if err != nil {
