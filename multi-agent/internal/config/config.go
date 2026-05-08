@@ -12,7 +12,7 @@ type AgentConfig struct {
 	Description   string   `yaml:"description"`
 	Instruction   string   `yaml:"instruction"`
 	AllowedTools  []string `yaml:"allowedTools"`
-	ApprovedTools []string `yaml:"ApprovedTools"`
+	ApprovedTools []string `yaml:"approvedTools"`
 }
 
 type AppConfig struct {

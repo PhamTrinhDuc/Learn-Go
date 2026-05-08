@@ -10,7 +10,12 @@ Doanh nghiệp 1 người điều hành, nhiều chi nhánh, có nhân viên (st
 
 ## Các actor trong hệ thống
 
-**Khách hàng** — tương tác qua Zalo / Web widget. Đặt lịch, hỏi dịch vụ, mua sản phẩm, nhận thông báo.
+**Khách hàng** — tương tác qua Slack, Discord, Zalo, Web, v...
+- Đặt lịch/hủy lịch cắt tóc trực tiếp với hệ thống agents (cho phép chọn stylists, dịch vụ, khung giờ trống)
+- Hỏi đáp các thông tin như: sản phẩm, cửa hàng, chăm sóc, dịch vụ, chi nhánh
+- Đặt hàng với các sản phẩm được bán trên website 
+- Nhận thông báo từ hệ thống khi tới giờ booking, đơn hàng được giao
+- Phê duyệt các hành động nhạy cảm cho hệ thống agents như: đặt hàng, booking. Khi được phê duyệt thì agents mới thực hiện hành động
 
 **Owner** — tương tác qua Dashboard web + Slack. Phê duyệt action nhạy cảm, xem báo cáo, cấu hình hệ thống.
 
@@ -192,24 +197,6 @@ Các action sau agent không được tự thực hiện, phải gửi Slack và
 - Hoàn tiền cho khách
 - Tặng điểm / voucher ngoài chương trình có sẵn
 - Gửi tin nhắn blast cho toàn bộ khách hàng
-
----
-
-## Kiến trúc dữ liệu — Các entity chính
-
-**Customer**: id, tên, SĐT, ngày sinh, chi nhánh hay đến, điểm tích lũy, nhóm khách, lịch sử tương tác
-
-**Branch**: id, tên, địa chỉ, giờ mở cửa, danh sách stylist, bảng giá riêng
-
-**Booking**: id, customer, branch, stylist, dịch vụ, thời gian, trạng thái, ghi chú
-
-**Product**: id, tên, loại (nội bộ / bán lẻ / cả hai), giá bán, ngưỡng cảnh báo
-
-**Inventory**: product, branch, qty_total, qty_retail, qty_internal, cập nhật lần cuối bởi ai
-
-**Order**: id, customer, items, tổng tiền, trạng thái thanh toán, điểm tích được
-
-**Stylist**: id, tên, branch, lịch làm việc, speciality
 
 ---
 

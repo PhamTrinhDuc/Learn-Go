@@ -1,4 +1,4 @@
-package main
+package server
 
 // https://github.com/achetronic/adk-utils-go.git
 import (
@@ -25,6 +25,7 @@ import (
 	"google.golang.org/adk/memory"
 	"google.golang.org/adk/runner"
 	"google.golang.org/adk/session"
+	"google.golang.org/adk/tool/toolconfirmation"
 	"google.golang.org/genai"
 )
 
@@ -32,6 +33,36 @@ const (
 	appName = "salon_chain"
 	userID  = "demo_user"
 )
+
+type ChatRequest struct {
+	SessionID string `json:"session_id"`
+	Message   string `json:"message"`
+}
+
+type ChatResponse struct {
+	SessionID string `json:"session_id"`
+	Message   string `json:"message"`
+
+	RequiresConfirmation bool        `json:"requires_confirmation"`
+	ConfirmationID       string      `json:"confirmation_id"`
+	Hint                 string      `json:"hint"`
+	Payload              interface{} `json:"payload"`
+}
+
+type ConfirmRequest struct {
+	SessionID      string      `json:"session_id"`
+	Confirmed      bool        `json:"confirmed"`
+	ConfirmationID string      `json:"confirmation_id"`
+	Hint           string      `json:"hint"`
+	Payload        interface{} `json:"payload"`
+}
+
+type AgentServer struct {
+	Runner         *runner.Runner
+	SessionService session.Service
+	Config         *config.AppConfig
+	Telemetry      *observability.Telemetry
+}
 
 // headerTransport là một RoundTripper tùy chỉnh để chèn thêm header vào mọi request
 type headerTransport struct {
@@ -69,23 +100,6 @@ func runAgent(ctx context.Context, runnr *runner.Runner, sessionID string, input
 	}
 
 	return responseText
-}
-
-type ChatRequest struct {
-	SessionID string `json:"session_id"`
-	Message   string `json:"message"`
-}
-
-type ChatResponse struct {
-	SessionID string `json:"session_id"`
-	Message   string `json:"message"`
-}
-
-type AgentServer struct {
-	Runner         *runner.Runner
-	SessionService session.Service
-	Config         *config.AppConfig
-	Telemetry      *observability.Telemetry
 }
 
 func loadConfig() observability.Config {
@@ -239,16 +253,115 @@ func (s *AgentServer) HandlerChat(c *gin.Context) {
 	ctxOtel, span := s.Telemetry.Tracer.Start(c.Request.Context(), "agent.request")
 	defer span.End()
 
+	// Turn 1: chạy bình thường, capture confirmation event
+	var pendingConfirmations map[string]toolconfirmation.ToolConfirmation
+	var confirmationCallID string
+
 	finalResponse := ""
 	for event, err := range s.Runner.Run(ctxOtel, userID, r.SessionID, userMsg, agent.RunConfig{}) {
 		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"Failed agent response": err.Error()})
 			log.Printf("Run error: %v", err)
+			c.JSON(http.StatusBadRequest, gin.H{"Failed to run agent ": err.Error()})
 		}
+
+		// In text bình thường
 		if event.Content != nil && len(event.Content.Parts) > 0 {
-			finalResponse += event.Content.Parts[0].Text
+			if event.Content.Parts[0].Text != "" {
+				finalResponse += event.Content.Parts[0].Text
+			}
+			for _, part := range event.Content.Parts {
+				// Nếu thấy Agent gọi hàm adk_request_confirmation
+				if part.FunctionCall != nil && part.FunctionCall.Name == "adk_request_confirmation" {
+					confirmationCallID = part.FunctionCall.ID // LẤY CÁI ID NÀY!
+					// log.Printf("[DEBUG] Thấy hàm duyệt ảo! ID: %s", confirmationCallID)
+				}
+			}
+		}
+		// Capture confirmation đang chờ
+		if event.Actions.RequestedToolConfirmations != nil {
+			pendingConfirmations = event.Actions.RequestedToolConfirmations
+		}
+	}
+	fmt.Println("Pending confirm:", pendingConfirmations)
+
+	// Turn 2: nếu có confirmation đang chờ → gửi approve response
+	if len(pendingConfirmations) > 0 {
+		for callID, conf := range pendingConfirmations {
+			// log.Printf("[DEBUG] Approving: callID=%s, hint=%s", callID, conf.Hint)
+
+			if confirmationCallID != "" && callID != "" {
+
+				// Dùng confirmationCallID thay vì cái ID trong map RequestedToolConfirmations
+				c.JSON(http.StatusOK, ChatResponse{
+					SessionID:            r.SessionID,
+					Message:              finalResponse,
+					RequiresConfirmation: true,
+					ConfirmationID:       confirmationCallID, // Trả cái ID ảo này về cho Client
+					Hint:                 conf.Hint,          // Lấy hint từ map
+				})
+				return
+			}
+		}
+	}
+	c.JSON(http.StatusOK, ChatResponse{
+		SessionID: r.SessionID,
+		Message:   finalResponse,
+	})
+}
+
+func (s *AgentServer) HandlerConfirm(c *gin.Context) {
+	var r ConfirmRequest
+	if err := c.ShouldBindBodyWithJSON(&r); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"Invalid request": err.Error()})
+		return
+	}
+
+	ctxOtel, span := s.Telemetry.Tracer.Start(c.Request.Context(), "agent.confirm")
+	defer span.End()
+	confirmationCallID := r.ConfirmationID
+	var parts []*genai.Part
+
+	if confirmationCallID != "" {
+		// Dùng confirmationCallID thay vì cái ID trong map RequestedToolConfirmations
+		parts = append(parts, &genai.Part{
+			FunctionResponse: &genai.FunctionResponse{
+				ID:   confirmationCallID, // PHẢI DÙNG ID NÀY
+				Name: "adk_request_confirmation",
+				Response: map[string]any{
+					"confirmed": true,
+					"hint":      r.Hint,
+					"payload":   r.Payload,
+				},
+			},
+		})
+	}
+
+	approvalMsg := &genai.Content{
+		Role:  string(genai.RoleUser),
+		Parts: parts,
+	}
+	finalResponse := ""
+	for event, err := range s.Runner.Run(ctxOtel, userID, r.SessionID, approvalMsg, agent.RunConfig{}) {
+		if err != nil {
+			log.Printf("Resume error: %v", err)
+			// Trả lỗi về để mình biết chính xác tại sao nó không chạy
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return // THOÁT NGAY
+		}
+
+		if event.Content != nil {
+			for _, part := range event.Content.Parts {
+				if part.Text != "" {
+					finalResponse += part.Text
+				}
+			}
 		}
 	}
 
-	c.JSON(http.StatusOK, ChatResponse{SessionID: r.SessionID, Message: finalResponse})
+	// Trả kết quả cuối cùng
+	c.JSON(http.StatusOK, ChatResponse{
+		SessionID: r.SessionID,
+		Message:   finalResponse,
+	})
+
 }

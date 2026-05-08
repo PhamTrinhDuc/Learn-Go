@@ -24,6 +24,7 @@ import (
 	"google.golang.org/adk/memory"
 	"google.golang.org/adk/runner"
 	"google.golang.org/adk/session"
+	"google.golang.org/adk/tool/toolconfirmation"
 	"google.golang.org/genai"
 )
 
@@ -130,7 +131,7 @@ func main() {
 	}
 
 	// 7. Run Test Chat
-	userInput := "Liệt kê cho tôi 5 branchs bên bạn?"
+	userInput := "Bên bạn có những chi nhánh nào?"
 	fmt.Printf("--- User: %s ---\n", userInput)
 
 	userMsg := genai.NewContentFromText(userInput, genai.RoleUser)
@@ -152,38 +153,76 @@ func main() {
 	}()
 	log.Println("OpenTelemetry initialized successfully")
 
-	// ctxOtel, span := telemetry.Tracer.Start(ctx, "agent.request")
-	// defer span.End()
+	ctxOtel, span := telemetry.Tracer.Start(ctx, "agent.request")
+	defer span.End()
 
-	for event, err := range runnr.Run(ctx, userID, sessionID, userMsg, agent.RunConfig{}) {
+	// Turn 1: chạy bình thường, capture confirmation event
+	var pendingConfirmations map[string]toolconfirmation.ToolConfirmation
+	var confirmationCallID string
+
+	for event, err := range runnr.Run(ctxOtel, userID, sessionID, userMsg, agent.RunConfig{}) {
 		if err != nil {
 			log.Fatalf("Run error: %v", err)
 		}
 
-		// 1. In ra nội dung Agent nói (nếu có)
+		fmt.Println(event.Actions)
+
+		// In text bình thường
 		if event.Content != nil && len(event.Content.Parts) > 0 {
-			fmt.Print(event.Content.Parts[0].Text)
+			if event.Content.Parts[0].Text != "" {
+				fmt.Println(event.Content.Parts[0].Text)
+			}
+			for _, part := range event.Content.Parts {
+				// Nếu thấy Agent gọi hàm adk_request_confirmation
+				if part.FunctionCall != nil && part.FunctionCall.Name == "adk_request_confirmation" {
+					confirmationCallID = part.FunctionCall.ID // LẤY CÁI ID NÀY!
+					log.Printf("[DEBUG] Thấy hàm duyệt ảo! ID: %s", confirmationCallID)
+				}
+			}
+		}
+		// Capture confirmation đang chờ
+		if event.Actions.RequestedToolConfirmations != nil {
+			pendingConfirmations = event.Actions.RequestedToolConfirmations
+		}
+	}
+	fmt.Println("Pending confirm:", pendingConfirmations)
+
+	// Turn 2: nếu có confirmation đang chờ → gửi approve response
+	if pendingConfirmations != nil {
+		var parts []*genai.Part
+		for callID, conf := range pendingConfirmations {
+			log.Printf("[DEBUG] Approving: callID=%s, hint=%s", callID, conf.Hint)
+
+			if confirmationCallID != "" {
+				// Dùng confirmationCallID thay vì cái ID trong map RequestedToolConfirmations
+				parts = append(parts, &genai.Part{
+					FunctionResponse: &genai.FunctionResponse{
+						ID:   confirmationCallID, // PHẢI DÙNG ID NÀY
+						Name: "adk_request_confirmation",
+						Response: map[string]any{
+							"confirmed": true,
+							"hint":      conf.Hint,
+							"payload":   conf.Payload,
+						},
+					},
+				})
+			}
 		}
 
-		// 2. Kiểm tra nếu Agent yêu cầu phê duyệt Tool
-		if event.Actions.RequestedToolConfirmations != nil {
-			for _, conf := range event.Actions.RequestedToolConfirmations {
-				fmt.Printf("\n--- [HITL] Đang đợi duyệt Tool: %s ---\n", conf.Payload)
-				fmt.Printf("Tham số: %v\n", conf.Confirmed)
+		approvalMsg := &genai.Content{
+			Role:  string(genai.RoleUser),
+			Parts: parts,
+		}
 
-				fmt.Println(">>> Hệ thống tự động Confirm (Approve)...")
+		for event, err := range runnr.Run(ctxOtel, userID, sessionID, approvalMsg, agent.RunConfig{}) {
+			if err != nil {
+				log.Fatalf("Resume error: %v", err)
+			}
 
-				// Dùng hàm Confirm thay vì Approve
-				// approved = true để đồng ý chạy tool
-				// for ev, err := range runnr.Run(ctxOtel, userID, sessionID, id, true) {
-				// 	if err != nil {
-				// 		log.Printf("Lỗi khi Confirm: %v", err)
-				// 		continue
-				// 	}
-				// 	// In kết quả sau khi tool chạy (nếu có)
-				// 	if ev.Content != nil && len(ev.Content.Parts) > 0 {
-				// 		fmt.Print(ev.Content.Parts[0].Text)
-				// 	}
+			fmt.Println(event.Content)
+			fmt.Println(event.Actions)
+			if event.Content != nil && len(event.Content.Parts) > 0 {
+				fmt.Print(event.Content.Parts[0].Text)
 			}
 		}
 	}
