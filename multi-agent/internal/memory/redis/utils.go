@@ -2,6 +2,7 @@ package redis
 
 import (
 	"encoding/json"
+	"fmt"
 	"strings"
 
 	"google.golang.org/adk/session"
@@ -25,12 +26,9 @@ func extractStateDeltas(state map[string]any) (appDelta, userDelta, sessionDelta
 			// {"user:name": "Jiyuu"} => {"name": "Jiyuu"}
 		} else if cleanedKey, found := strings.CutPrefix(key, session.KeyPrefixUser); found {
 			userDelta[cleanedKey] = value
-		} else {
 			// {"temp:token_count": 1234} => {"token_count": 1234}
-			cleanedKey, found := strings.CutPrefix(key, session.KeyPrefixTemp)
-			if found {
-				sessionDelta[cleanedKey] = value
-			}
+		} else if cleanedKey, found := strings.CutPrefix(key, session.KeyPrefixTemp); found {
+			sessionDelta[cleanedKey] = value
 		}
 	}
 	return appDelta, userDelta, sessionDelta
@@ -44,6 +42,8 @@ func unmarshalHashFields(data map[string]string) map[string]any {
 		var parsedValue any
 		if err := json.Unmarshal([]byte(value), &parsedValue); err != nil {
 			result[key] = value
+			fmt.Printf("failed to parse data key: %s, value: %s. Error: %s", key, value, err)
+			continue
 		}
 		result[key] = parsedValue
 	}
@@ -57,6 +57,7 @@ func marshalHashFields(data map[string]any) map[string]string {
 	for key, value := range data {
 		data, err := json.Marshal(value)
 		if err != nil {
+			fmt.Printf("failed to parse data key: %s, value: %s", key, value)
 			continue
 		}
 		result[key] = string(data)

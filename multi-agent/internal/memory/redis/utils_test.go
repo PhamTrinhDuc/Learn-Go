@@ -8,6 +8,7 @@ import (
 )
 
 func TestExtractStateDeltas(t *testing.T) {
+	countFuncTest += 1
 	tests := []struct {
 		name                 string
 		state                map[string]any
@@ -16,21 +17,21 @@ func TestExtractStateDeltas(t *testing.T) {
 		expectedSessionDelta map[string]any
 	}{
 		{
-			name:                 "nil state",
+			name:                 getName("nil state"),
 			state:                nil,
 			expectedAppDelta:     nil,
 			expectedUserDelta:    nil,
 			expectedSessionDelta: nil,
 		},
 		{
-			name:                 "empty state",
+			name:                 getName("empty state"),
 			state:                map[string]any{},
 			expectedAppDelta:     map[string]any{},
 			expectedUserDelta:    map[string]any{},
 			expectedSessionDelta: map[string]any{},
 		},
 		{
-			name: "mixed state",
+			name: getName("mixed state"),
 			state: map[string]any{
 				session.KeyPrefixApp + "theme":    "dark",
 				session.KeyPrefixUser + "name":    "Jiyuu",
@@ -48,7 +49,7 @@ func TestExtractStateDeltas(t *testing.T) {
 			},
 		},
 		{
-			name: "only app state",
+			name: getName("only app state"),
 			state: map[string]any{
 				session.KeyPrefixApp + "lang": "en",
 			},
@@ -71,18 +72,19 @@ func TestExtractStateDeltas(t *testing.T) {
 }
 
 func TestUnmarshalHashFields(t *testing.T) {
+	countFuncTest += 1
 	tests := []struct {
 		name     string
 		data     map[string]string
 		expected map[string]any
 	}{
 		{
-			name:     "empty data",
+			name:     getName("empty data"),
 			data:     map[string]string{},
 			expected: map[string]any{},
 		},
 		{
-			name: "various types",
+			name: getName("various types"),
 			data: map[string]string{
 				"string": "\"hello\"",
 				"int":    "123",
@@ -101,7 +103,7 @@ func TestUnmarshalHashFields(t *testing.T) {
 			},
 		},
 		{
-			name: "invalid json",
+			name: getName("invalid json"),
 			data: map[string]string{
 				"invalid": "{not-json}",
 			},
@@ -120,18 +122,19 @@ func TestUnmarshalHashFields(t *testing.T) {
 }
 
 func TestMarshalHashFields(t *testing.T) {
+	countFuncTest += 1
 	tests := []struct {
 		name     string
 		data     map[string]any
 		expected map[string]string
 	}{
 		{
-			name:     "empty data",
+			name:     getName("empty data"),
 			data:     map[string]any{},
 			expected: map[string]string{},
 		},
 		{
-			name: "various types",
+			name: getName("various types"),
 			data: map[string]any{
 				"string": "hello",
 				"int":    123,
