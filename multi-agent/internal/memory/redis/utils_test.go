@@ -33,10 +33,9 @@ func TestExtractStateDeltas(t *testing.T) {
 		{
 			name: getName("mixed state"),
 			state: map[string]any{
-				session.KeyPrefixApp + "theme":    "dark",
-				session.KeyPrefixUser + "name":    "Jiyuu",
-				session.KeyPrefixTemp + "counter": 123,
-				"unknown:key":                     "value",
+				session.KeyPrefixApp + "theme": "dark",
+				session.KeyPrefixUser + "name": "Jiyuu",
+				"counter":                      123,
 			},
 			expectedAppDelta: map[string]any{
 				"theme": "dark",

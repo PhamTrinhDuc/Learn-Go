@@ -26,8 +26,8 @@ func extractStateDeltas(state map[string]any) (appDelta, userDelta, sessionDelta
 			// {"user:name": "Jiyuu"} => {"name": "Jiyuu"}
 		} else if cleanedKey, found := strings.CutPrefix(key, session.KeyPrefixUser); found {
 			userDelta[cleanedKey] = value
-			// {"temp:token_count": 1234} => {"token_count": 1234}
-		} else if cleanedKey, found := strings.CutPrefix(key, session.KeyPrefixTemp); found {
+			// {"token_count": 1234} => {"token_count": 1234}
+		} else if !strings.HasPrefix(key, session.KeyPrefixTemp) {
 			sessionDelta[cleanedKey] = value
 		}
 	}

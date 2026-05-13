@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"strings"
+	"sync"
 	"time"
 
 	"github.com/redis/go-redis/v9"
@@ -18,6 +20,7 @@ type RedisService struct {
 	ttl          time.Duration
 	appStateTTL  time.Duration
 	userStateTTL time.Duration
+	mu           sync.Mutex
 }
 
 // redisSession implements session.Session.
@@ -111,6 +114,7 @@ func NewRedisService(cfg *RedisConfig) (*RedisService, error) {
 		ttl:          cfg.TTL,
 		appStateTTL:  cfg.AppStateTTL,
 		userStateTTL: cfg.UserStateTTL,
+		mu:           sync.Mutex{},
 	}, nil
 }
 
@@ -156,6 +160,9 @@ func (s *RedisService) Create(ctx context.Context, req *session.CreateRequest) (
 	// Xét TH sau với hàm updateAppUser: khách hàng ấn vào 1 sản phẩm giày nike trên web và chọn chat ngay:
 	// Lúc này việc update có nhiệm vụ cập nhật các state như: {"user:last_viewed_product": "Giày Nike", "current_page": "Promotion"}
 	// Các thông tin này sẽ có ích cho AI khi chat
+
+	s.mu.Lock() // lock avoid race condition on 1 instance
+	defer s.mu.Unlock()
 
 	// Coding start:
 	// 1. check exists session key
@@ -328,6 +335,88 @@ func (s *RedisService) Delete(ctx context.Context, req *session.DeleteRequest) e
 
 	if _, err := pipe.Exec(ctx); err != nil {
 		return fmt.Errorf("failed to delete session: %w", err)
+	}
+	return nil
+}
+
+func (s *RedisService) AddEvents(ctx context.Context, sess session.Session, evt *session.Event) error {
+	// 1. If chunk streaming => do nothing
+	if evt.Partial {
+		return nil
+	}
+
+	// lock RedisService avoid race condition on 1 instance
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	// 2. Add event to Redis
+	// trim key have prefix temp:
+	if len(evt.Actions.StateDelta) > 0 {
+		filtered := make(map[string]any, len(evt.Actions.StateDelta))
+		for k, v := range evt.Actions.StateDelta {
+			if !strings.HasPrefix(k, session.KeyPrefixTemp) {
+				filtered[k] = v
+			}
+		}
+		evt.Actions.StateDelta = filtered
+	}
+
+	evt.Timestamp = time.Now()
+	if evt.ID == "" {
+		evt.ID = fmt.Sprintf("%d", time.Now().UnixNano())
+	}
+
+	evtData, err := json.Marshal(evt)
+	if err != nil {
+		return fmt.Errorf("failed to marshal event: %w", err)
+	}
+	evtKey := s.eventsKey(sess.AppName(), sess.UserID(), sess.ID())
+	if err := s.client.RPush(ctx, evtKey, evtData).Err(); err != nil {
+		return fmt.Errorf("failed to push event to Redis: %w", err)
+	}
+
+	s.client.Expire(ctx, evtKey, s.ttl)
+	// 3. Update State from session.Session
+	// a. get session from redis and update state data from session.Session
+	sessKey := s.sessionKey(sess.AppName(), sess.UserID(), sess.ID())
+	sessFromRedis, err := s.client.Get(ctx, sessKey).Bytes()
+	if err != nil {
+		return fmt.Errorf("failed to get session for update: %w", err)
+	}
+
+	var storable storableSession
+	if err := json.Unmarshal([]byte(sessFromRedis), &storable); err != nil {
+		return fmt.Errorf("failed to unmarshal session to storable: %w", err)
+	}
+
+	for k, v := range sess.State().All() {
+		// if key no prefix => session state
+		if strings.HasPrefix(k, session.KeyPrefixApp) || strings.HasPrefix(k, session.KeyPrefixUser) || strings.HasPrefix(k, session.KeyPrefixTemp) {
+			continue
+		}
+		storable.State[k] = v
+	}
+
+	// b. Update State from evt.Actions.StateDelta
+	if len(evt.Actions.StateDelta) > 0 {
+		appDelta, userDelta, stateDelta := extractStateDeltas(evt.Actions.StateDelta)
+		s.updateAppState(ctx, sess.AppName(), appDelta)
+		s.updateUserState(ctx, sess.AppName(), sess.UserID(), userDelta)
+		// add state delta to session state
+		for k, v := range stateDelta {
+			storable.State[k] = v
+		}
+	}
+
+	if len(storable.State) > 0 {
+		storable.LastUpdateTime = time.Now()
+	}
+	updatedData, err := json.Marshal(storable)
+	if err != nil {
+		return fmt.Errorf("failed to marshal update State data: %w", err)
+	}
+	if err := s.client.Set(ctx, sessKey, updatedData, s.ttl).Err(); err != nil {
+		return fmt.Errorf("failed to store update State: %w", err)
 	}
 	return nil
 }

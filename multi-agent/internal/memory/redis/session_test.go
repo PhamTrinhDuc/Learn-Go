@@ -23,12 +23,6 @@ const (
 	account  = "Jiyuu@gmail.com"
 )
 
-var countFuncTest = 0
-
-func getName(name string) string {
-	return fmt.Sprintf(" %d.🧪%s", countFuncTest, name)
-}
-
 func GetRedisConfig() RedisConfig {
 	return RedisConfig{
 		Host:         utils.GetEnvString("REDIS_HOST", "localhost"),
@@ -46,6 +40,13 @@ func SetupRedis() *RedisService {
 	client, _ := NewRedisService(&cfg)
 	return client
 }
+
+func getName(name string) string {
+	return fmt.Sprintf(" %d.🧪%s", countFuncTest, name)
+}
+
+var countFuncTest = 0
+var redisSvc = SetupRedis()
 
 func TestNewRedis(t *testing.T) {
 	env := GetRedisConfig()
@@ -96,7 +97,6 @@ func TestNewRedis(t *testing.T) {
 }
 
 func TestCreateKeys(t *testing.T) {
-	redisSvc := SetupRedis()
 	countFuncTest += 1
 	tests := []struct {
 		name     string
@@ -166,6 +166,7 @@ func TestMergeState(t *testing.T) {
 
 func TestUpdateState(t *testing.T) {
 	countFuncTest += 1
+	ctx := context.Background()
 	redis := SetupRedis()
 	tests := []struct {
 		name     string
@@ -181,7 +182,6 @@ func TestUpdateState(t *testing.T) {
 			},
 			call: func() map[string]any {
 				key := redis.userStateKey(appName, userID)
-				ctx := context.Background()
 
 				redis.client.HSet(
 					ctx, key,
@@ -191,7 +191,6 @@ func TestUpdateState(t *testing.T) {
 						"account": "Eren@gmail.com",
 					},
 				)
-				redis.client.Expire(ctx, key, 1*time.Minute)
 
 				result, err := redis.updateUserState(
 					ctx, appName, userID,
@@ -201,7 +200,6 @@ func TestUpdateState(t *testing.T) {
 						"account": account,
 					},
 				)
-				redis.client.Del(ctx, key)
 				assert.NoError(t, err)
 				return result
 			},
@@ -215,7 +213,6 @@ func TestUpdateState(t *testing.T) {
 			},
 			call: func() map[string]any {
 				key := redis.appStateKey(appName)
-				ctx := context.Background()
 				redis.client.HSet(ctx, key,
 					map[string]any{
 						"theme": "light",
@@ -229,7 +226,6 @@ func TestUpdateState(t *testing.T) {
 						"lang":  lang,
 					},
 				)
-				redis.client.Del(ctx, key)
 				assert.NoError(t, err)
 				return result
 			},
@@ -238,11 +234,16 @@ func TestUpdateState(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			assert.Equal(t, tc.expected, tc.call())
+			redisSvc.FlushDB(ctx)
 		})
 	}
 }
 
 func TestCreateAndGetSession(t *testing.T) {
+	// Prefix user: => user delta
+	// Prefix app: => app delta
+	// Prefix tmp: => pass through
+	// No Prefix => session delta
 	countFuncTest += 1
 	ctx := context.Background()
 	tests := []struct {
@@ -264,9 +265,9 @@ func TestCreateAndGetSession(t *testing.T) {
 			request: session.CreateRequest{
 				AppName: appName,
 				UserID:  userID,
-				State:   map[string]any{"user_name": userName, "email": account},
+				State:   map[string]any{"session_id": sessionID},
 			},
-			expected: map[string]any{},
+			expected: map[string]any{"session_id": sessionID},
 		},
 		{
 			name: getName("Perfect data"),
@@ -274,12 +275,12 @@ func TestCreateAndGetSession(t *testing.T) {
 				AppName: appName,
 				UserID:  userID,
 				State: map[string]any{
-					session.KeyPrefixUser + "user_id":   userID,
-					session.KeyPrefixUser + "name":      userName,
-					session.KeyPrefixUser + "email":     account,
-					session.KeyPrefixApp + "theme":      theme,
-					session.KeyPrefixApp + "lang":       lang,
-					session.KeyPrefixTemp + "sesion_id": sessionID,
+					session.KeyPrefixUser + "user_id": userID,
+					session.KeyPrefixUser + "name":    userName,
+					session.KeyPrefixUser + "email":   account,
+					session.KeyPrefixApp + "theme":    theme,
+					session.KeyPrefixApp + "lang":     lang,
+					"sesion_id":                       sessionID,
 				},
 			},
 			expected: map[string]any{
@@ -301,8 +302,7 @@ func TestCreateAndGetSession(t *testing.T) {
 					session.KeyPrefixUser + "name":    userName,
 					session.KeyPrefixApp + "theme":    theme,
 					session.KeyPrefixApp + "lang":     lang,
-					"email":                           account,
-					"sesion_id":                       sessionID,
+					"session_id":                      sessionID,
 				},
 			},
 			expected: map[string]any{
@@ -310,12 +310,12 @@ func TestCreateAndGetSession(t *testing.T) {
 				"user:name":    userName,
 				"app:theme":    theme,
 				"app:lang":     lang,
+				"session_id":   sessionID,
 			},
 		},
 	}
 	for _, tc := range tests {
 		request := tc.request
-		redisSvc := SetupRedis()
 
 		creResp, err := redisSvc.Create(ctx, &request)
 		assert.NoError(t, err)
@@ -345,7 +345,6 @@ func TestCreateAndGetSession(t *testing.T) {
 
 func TestListSession(t *testing.T) {
 	countFuncTest += 1
-	redisSvc := SetupRedis()
 	ctx := context.Background()
 
 	tests := []struct {
@@ -422,7 +421,7 @@ func TestListSession(t *testing.T) {
 
 func TestDeleteSession(t *testing.T) {
 	ctx := context.Background()
-	redisSvc := SetupRedis()
+
 	reqCreate := session.CreateRequest{
 		AppName:   appName,
 		UserID:    userID,
@@ -455,4 +454,90 @@ func TestDeleteSession(t *testing.T) {
 		resp, err := redisSvc.Get(ctx, &reqGet)
 		assert.Nil(t, resp)
 	})
+	redisSvc.FlushDB(ctx)
 }
+
+func TestAddEvents(t *testing.T) {
+	ctx := context.Background()
+
+	// 1. Create session
+	sess, err := redisSvc.Create(ctx, &session.CreateRequest{
+		AppName:   appName,
+		UserID:    userID,
+		SessionID: sessionID,
+		State: map[string]any{
+			"user:user_name": userName,
+			"user:email":     account,
+			"last_updated":   "2026-13-5",
+		},
+	})
+	assert.NoError(t, err)
+
+	// 2. Add event
+	err = redisSvc.AddEvents(ctx, sess.Session, &session.Event{
+		ID:     redisSvc.eventsKey(appName, userID, sessionID),
+		Author: "user",
+		Actions: session.EventActions{
+			StateDelta: map[string]any{"temp:count": 1},
+		},
+	})
+	assert.NoError(t, err)
+
+	gotSess, err := redisSvc.Get(ctx, &session.GetRequest{
+		AppName:   appName,
+		UserID:    userID,
+		SessionID: sessionID,
+	})
+
+	assert.Equal(t, gotSess.Session.State().(*redisState).data, map[string]any{
+		"user:user_name": userName,
+		"user:email":     account,
+		"last_updated":   "2026-13-5",
+	})
+
+	redisSvc.FlushDB(ctx)
+}
+
+
+
+func TestAddEventsWithPartial(t *testing.T) {
+	ctx := context.Background()
+
+	// 1. Create session
+	sess, err := redisSvc.Create(ctx, &session.CreateRequest{
+		AppName:   appName,
+		UserID:    userID,
+		SessionID: sessionID,
+		State: map[string]any{
+			"user:user_name": userName,
+			"user:email":     account,
+			"last_updated":   "2026-13-5",
+		},
+	})
+	assert.NoError(t, err)
+
+	// 2. Add event
+	err = redisSvc.AddEvents(ctx, sess.Session, &session.Event{
+		ID:     redisSvc.eventsKey(appName, userID, sessionID),
+		Author: "user",
+		Actions: session.EventActions{
+			StateDelta: map[string]any{"temp:count": 1},
+		},
+	})
+	assert.NoError(t, err)
+
+	gotSess, err := redisSvc.Get(ctx, &session.GetRequest{
+		AppName:   appName,
+		UserID:    userID,
+		SessionID: sessionID,
+	})
+
+	assert.Equal(t, gotSess.Session.State().(*redisState).data, map[string]any{
+		"user:user_name": userName,
+		"user:email":     account,
+		"last_updated":   "2026-13-5",
+	})
+
+	redisSvc.FlushDB(ctx)
+}
+

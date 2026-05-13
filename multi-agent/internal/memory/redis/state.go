@@ -1,7 +1,11 @@
 package redis
 
 import (
+	"context"
+	"encoding/json"
+	"fmt"
 	"iter"
+	"strings"
 	"time"
 
 	"github.com/redis/go-redis/v9"
@@ -42,13 +46,78 @@ func (s *redisState) Data() map[string]any {
 }
 
 func (s *redisState) Get(key string) (any, error) {
-	return nil, nil
+	v, ok := s.data[key]
+	if ok {
+		return v, nil
+	}
+	return nil, session.ErrStateKeyNotExist
 }
+
 func (s *redisState) Set(key string, value any) error {
+	ctx := context.Background()
+	if strings.HasPrefix(key, session.KeyPrefixApp) {
+		appKey := s.service.appStateKey(s.appName)
+		s.client.HSet(ctx, appKey, value)
+		if s.service.appStateTTL > 0 {
+			s.client.Expire(ctx, appKey, s.service.appStateTTL)
+		} else {
+			s.client.Persist(ctx, appKey)
+		}
+	}
+
+	if strings.HasPrefix(key, session.KeyPrefixUser) {
+		userKey := s.service.userStateKey(s.appName, s.userID)
+		s.client.HSet(ctx, userKey, value)
+
+		if s.service.userStateTTL > 0 {
+			s.client.Expire(ctx, userKey, s.service.userStateTTL)
+		} else {
+			s.client.Persist(ctx, userKey)
+		}
+	}
+	if strings.HasPrefix(key, session.KeyPrefixTemp) {
+		return nil
+	}
+	return s.UpdateSessionState()
+}
+
+func (s *redisState) UpdateSessionState() error {
+	ctx := context.Background()
+	data, err := s.client.Get(ctx, s.key).Result()
+	if err != nil {
+		return fmt.Errorf("failed to get session for state update: %w", err)
+	}
+
+	var storable storableSession
+	if err := json.Unmarshal([]byte(data), &storable); err != nil {
+		return fmt.Errorf("failed to unmarshal data for storable: %w", err)
+	}
+
+	for k, v := range s.data {
+		if !strings.Contains(k, session.KeyPrefixApp) || !strings.Contains(k, session.KeyPrefixUser) || !strings.Contains(k, session.KeyPrefixTemp) {
+			storable.State[k] = v
+		}
+	}
+	storable.LastUpdateTime = time.Now()
+
+	dataUpdated, err := json.Marshal(storable)
+	if err != nil {
+		return fmt.Errorf("failed to marshal data updated: %w", err)
+	}
+	if err := s.client.Set(ctx, s.key, dataUpdated, s.ttl).Err(); err != nil {
+		return fmt.Errorf("failed to set data updated: %w", err)
+	}
 	return nil
 }
+
 func (s *redisState) All() iter.Seq2[string, any] {
-	return nil
+	return func(yield func(string, any) bool) {
+		for k, v := range s.data {
+			if !yield(k, v) {
+				return
+			}
+		}
+	}
 }
 
 var _ session.State = (*redisState)(nil)
