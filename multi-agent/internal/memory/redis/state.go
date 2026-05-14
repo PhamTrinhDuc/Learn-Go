@@ -55,9 +55,13 @@ func (s *redisState) Get(key string) (any, error) {
 
 func (s *redisState) Set(key string, value any) error {
 	ctx := context.Background()
-	if strings.HasPrefix(key, session.KeyPrefixApp) {
+	if cleaned, found := strings.CutPrefix(key, session.KeyPrefixApp); found {
 		appKey := s.service.appStateKey(s.appName)
-		s.client.HSet(ctx, appKey, value)
+		data, err := json.Marshal(value)
+		if err != nil {
+			return fmt.Errorf("failed to marshal data: %w", err)
+		}
+		s.client.HSet(ctx, appKey, cleaned, string(data))
 		if s.service.appStateTTL > 0 {
 			s.client.Expire(ctx, appKey, s.service.appStateTTL)
 		} else {
@@ -65,9 +69,14 @@ func (s *redisState) Set(key string, value any) error {
 		}
 	}
 
-	if strings.HasPrefix(key, session.KeyPrefixUser) {
+	if cleaned, found := strings.CutPrefix(key, session.KeyPrefixUser); found {
 		userKey := s.service.userStateKey(s.appName, s.userID)
-		s.client.HSet(ctx, userKey, value)
+
+		data, err := json.Marshal(value)
+		if err != nil {
+			return fmt.Errorf("failed to marshal data: %w", err)
+		}
+		s.client.HSet(ctx, userKey, cleaned, string(data))
 
 		if s.service.userStateTTL > 0 {
 			s.client.Expire(ctx, userKey, s.service.userStateTTL)

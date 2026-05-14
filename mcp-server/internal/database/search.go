@@ -45,10 +45,10 @@ type HybridSearchResult struct {
 func (db *DB) VectorSearch(ctx context.Context, embedding []float32, limit int) ([]*VectorSearchResult, error) {
 	queryString := `
 		SELECT id, branch_id, title, content, metadata, embedding, created_at, updated_at,
-		1 - (embedding <=>$1) AS similarity_score
+		1 - (embedding <=>$1::vector) AS similarity_score
 		FROM knowledge_base 
 		WHERE embedding IS NOT NULL AND is_active = TRUE
-		ORDER BY embedding <=> $1
+		ORDER BY embedding <=> $1::vector
 		LIMIT $2
 	`
 	vec := pgvector.NewVector(embedding)
@@ -88,6 +88,7 @@ func (db *DB) VectorSearch(ctx context.Context, embedding []float32, limit int) 
 	return results, nil
 }
 
+// FullTextSearch performs full-text search using pg_textsearch (ParadEDB)
 func (db *DB) FullTextSearch(ctx context.Context, query string, limit int) ([]*FullTextSearchResult, error) {
 	if limit <= 0 {
 		limit = 10
@@ -96,11 +97,11 @@ func (db *DB) FullTextSearch(ctx context.Context, query string, limit int) ([]*F
 	queryString := `
 		SELECT
 			id, branch_id, title, content, metadata, created_at, updated_at,
-			search_text <@> $1::text AS bm25_score
+			ROW_NUMBER() OVER (ORDER BY paradedb.score(id_kb) DESC) AS rank
 		FROM knowledge_base
 		WHERE is_active = TRUE
-		  AND (search_text <@> $1::text) > 0
-		ORDER BY bm25_score DESC
+		  AND id_kb @@@ paradedb.parse($1)
+		ORDER BY rank
 		LIMIT $2
 	`
 
@@ -142,7 +143,7 @@ func (db *DB) FullTextSearch(ctx context.Context, query string, limit int) ([]*F
 	return results, nil
 }
 
-// This implements a Reciprocal Rank Fusion (RRF) approach for combining results
+// HybridSearch implements a Reciprocal Rank Fusion (RRF) approach for combining results
 func (db *DB) HybridSearch(ctx context.Context, params HybridSearchParams) ([]HybridSearchResult, error) {
 	if params.Limit <= 0 {
 		params.Limit = 10
@@ -160,12 +161,12 @@ func (db *DB) HybridSearch(ctx context.Context, params HybridSearchParams) ([]Hy
 		bm25_results AS (
 			SELECT 
 				id, branch_id, title, content, metadata, embedding, created_at, updated_at,
-				ROW_NUMBER() OVER (ORDER BY search_text <@> $1::text) AS bm25_rank
+				ROW_NUMBER() OVER (ORDER BY paradedb.score(id_kb) DESC) AS rank
 			FROM knowledge_base
 			WHERE is_active = TRUE
-			  	AND (branch_id = $3 OR branch_id IS NULL OR $3 IS NULL)
-			   	AND (search_text <@> $1::text) > 0
-			ORDER BY search_text <@> $1::text
+			  	AND (branch_id = $2 OR branch_id IS NULL OR $2 IS NULL)
+			   	AND id_kb @@@ paradedb.parse($1)
+			ORDER BY paradedb.score(id_kb) DESC
 			LIMIT 50
 		),
 
@@ -173,12 +174,12 @@ func (db *DB) HybridSearch(ctx context.Context, params HybridSearchParams) ([]Hy
 		vector_results AS (
 			SELECT 
 				id, branch_id, title, content, metadata, embedding, created_at, updated_at,
-				ROW_NUMBER() OVER (ORDER BY embedding <=> $2) AS vector_rank
+				ROW_NUMBER() OVER (ORDER BY embedding <=> $3) AS vector_rank
 			FROM knowledge_base
 			WHERE is_active = TRUE 
 			  AND embedding IS NOT NULL
-			  AND (branch_id = $3 OR branch_id IS NULL OR $3 IS NULL)
-			ORDER BY embedding <=> $2
+			  AND (branch_id = $2 OR branch_id IS NULL OR $2 IS NULL)
+			ORDER BY embedding <=> $3
 			LIMIT 50
 		),
 

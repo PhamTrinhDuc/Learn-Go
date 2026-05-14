@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"google.golang.org/adk/model"
 	"google.golang.org/adk/session"
 )
 
@@ -478,7 +479,7 @@ func TestAddEvents(t *testing.T) {
 		ID:     redisSvc.eventsKey(appName, userID, sessionID),
 		Author: "user",
 		Actions: session.EventActions{
-			StateDelta: map[string]any{"temp:count": 1},
+			StateDelta: map[string]any{"temp:count": 1, "assistant": "I can..."},
 		},
 	})
 	assert.NoError(t, err)
@@ -489,16 +490,17 @@ func TestAddEvents(t *testing.T) {
 		SessionID: sessionID,
 	})
 
-	assert.Equal(t, gotSess.Session.State().(*redisState).data, map[string]any{
-		"user:user_name": userName,
-		"user:email":     account,
-		"last_updated":   "2026-13-5",
+	t.Run(getName("test add events"), func(t *testing.T) {
+		assert.Equal(t, gotSess.Session.State().(*redisState).data, map[string]any{
+			"user:user_name": userName,
+			"user:email":     account,
+			"last_updated":   "2026-13-5",
+			"assistant":      "I can...",
+		})
 	})
 
 	redisSvc.FlushDB(ctx)
 }
-
-
 
 func TestAddEventsWithPartial(t *testing.T) {
 	ctx := context.Background()
@@ -518,10 +520,11 @@ func TestAddEventsWithPartial(t *testing.T) {
 
 	// 2. Add event
 	err = redisSvc.AddEvents(ctx, sess.Session, &session.Event{
-		ID:     redisSvc.eventsKey(appName, userID, sessionID),
-		Author: "user",
+		ID:          redisSvc.eventsKey(appName, userID, sessionID),
+		Author:      "user",
+		LLMResponse: model.LLMResponse{Partial: true},
 		Actions: session.EventActions{
-			StateDelta: map[string]any{"temp:count": 1},
+			StateDelta: map[string]any{"temp:count": 1, "assistant": "I can..."},
 		},
 	})
 	assert.NoError(t, err)
@@ -531,13 +534,12 @@ func TestAddEventsWithPartial(t *testing.T) {
 		UserID:    userID,
 		SessionID: sessionID,
 	})
-
-	assert.Equal(t, gotSess.Session.State().(*redisState).data, map[string]any{
-		"user:user_name": userName,
-		"user:email":     account,
-		"last_updated":   "2026-13-5",
+	t.Run(getName("test add event with partial"), func(t *testing.T) {
+		assert.Equal(t, gotSess.Session.State().(*redisState).data, map[string]any{
+			"user:user_name": userName,
+			"user:email":     account,
+			"last_updated":   "2026-13-5",
+		})
+		redisSvc.FlushDB(ctx)
 	})
-
-	redisSvc.FlushDB(ctx)
 }
-

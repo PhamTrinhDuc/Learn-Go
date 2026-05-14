@@ -25,9 +25,10 @@ var configModel = llm.Config{
 		APIKey:   utils.GetEnvString("GROQ_API_KEY", ""),
 	},
 	Embed: llm.ProviderConfig{
-		Provider: llm.ProviderOllama,
-		BaseURL:  "http://localhost:11434",
-		Model:    "qwen3-embedding:0.6b",
+		Provider: llm.ProviderOpenAI,
+		// BaseURL:  "http://localhost:11434",
+		Model:  "text-embedding-3-small",
+		APIKey: utils.GetEnvString("OPENAI_API_KEY", ""),
 	},
 }
 

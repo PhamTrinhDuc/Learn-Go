@@ -2,13 +2,15 @@
 -- CHUỖI CẮT TÓC — DATABASE SCHEMA
 -- PostgreSQL + pgvector
 -- ============================================================
-CREATE EXTENSION IF NOT EXISTS vectorscale CASCADE;
-CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 CREATE EXTENSION IF NOT EXISTS vector;
 CREATE EXTENSION IF NOT EXISTS unaccent;
--- Dùng extension BM25 thực thụ (tốt hơn ts_rank rất nhiều)
--- Option A: pg_textsearch (Timescale/TigerData)
-CREATE EXTENSION IF NOT EXISTS pg_textsearch;  
+CREATE EXTENSION IF NOT EXISTS pg_search;
+CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
+
+-- Function hỗ trợ tìm kiếm không dấu
+CREATE OR REPLACE FUNCTION immutable_unaccent(text)
+RETURNS text LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE AS
+$$ SELECT public.unaccent($1) $$;
 
 -- ============================================================
 -- NHÓM 1: CẤU TRÚC CỬA HÀNG
@@ -225,7 +227,7 @@ CREATE TABLE knowledge_base (
     branch_id  UUID REFERENCES branch(id) ON DELETE CASCADE,  -- NULL = dùng chung
     title      VARCHAR(200) NOT NULL,
     content    TEXT NOT NULL,
-    embedding  vector(1024),                   -- OpenAI / Anthropic embedding dim
+    embedding  vector(1536),                   -- OpenAI / Anthropic embedding dim
     metadata   JSONB,
     category   VARCHAR(50),
     is_active  BOOLEAN NOT NULL DEFAULT TRUE,
@@ -256,139 +258,84 @@ CREATE TABLE agent_action_log (
     created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+
+CREATE TABLE IF NOT EXISTS memory_entries (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    app_name VARCHAR(255) NOT NULL,
+    user_id VARCHAR(255) NOT NULL,
+    session_id VARCHAR(255) NOT NULL,
+    event_id VARCHAR(255) NOT NULL,
+    author VARCHAR(255),
+    content JSONB NOT NULL,
+    content_text TEXT NOT NULL,
+    timestamp TIMESTAMPTZ NOT NULL,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    UNIQUE(app_name, user_id, session_id, event_id)
+);
+
+-- Indexes for efficient querying
+CREATE INDEX IF NOT EXISTS idx_memory_app_user ON memory_entries(app_name, user_id);
+CREATE INDEX IF NOT EXISTS idx_memory_session ON memory_entries(session_id);
+CREATE INDEX IF NOT EXISTS idx_memory_timestamp ON memory_entries(timestamp);
+
 -- ============================================================
 -- INDEXES
 -- ============================================================
 
--- User
-CREATE UNIQUE INDEX idx_user_phone ON users(phone);
+-- User: Tìm kiếm nhanh tên (không dấu) và Email
+CREATE INDEX idx_users_name_search ON users (immutable_unaccent(lower(name)));
+CREATE INDEX idx_users_email ON users(email);
 
--- Booking
+-- Booking: Các index hiện tại của bạn đã rất chuẩn
 CREATE INDEX idx_booking_stylist_time  ON booking(stylist_id, scheduled_at);
 CREATE INDEX idx_booking_branch_time   ON booking(branch_id, scheduled_at);
 CREATE INDEX idx_booking_customer      ON booking(user_id);
 CREATE INDEX idx_booking_status        ON booking(status);
 
--- Inventory
+-- Inventory & Logs
 CREATE INDEX idx_inventory_branch      ON inventory(branch_id);
 CREATE INDEX idx_inventory_product     ON inventory(product_id);
+CREATE INDEX idx_inventory_log_ref     ON inventory_log(inventory_id, created_at);
 
--- Conversation & Messages
-CREATE INDEX idx_conversation_user     ON conversation(user_id);
+-- Chat & Loyalty
 CREATE INDEX idx_messages_conversation ON messages(conversation_id, created_at);
-
--- Loyalty
 CREATE INDEX idx_loyalty_customer      ON loyalty_transaction(user_id);
 
--- Notify (tránh spam)
-CREATE INDEX idx_notify_user_type      ON notify_log(user_id, type, sent_at);
-
--- Agent action log
-CREATE INDEX idx_agent_log_status      ON agent_action_log(status)
+-- Partial Index: Tối ưu cho việc duyệt Agent actions
+CREATE INDEX idx_agent_log_pending ON agent_action_log(status) 
     WHERE status = 'pending_approval';
 
 -- ============================================================
--- INDEXES CHO KNOWLEDGE BASE - HYBRID SEARCH (BM25 + Vector)
+-- HYBRID SEARCH (BM25 + Vector)
 -- ============================================================
 
--- BM25 Index sử dụng pg_textsearch (rất quan trọng)
--- 1. Thêm cột gộp (nếu chưa có trong định nghĩa bảng). BM25 chỉ cho index 1 cột nên tạo cột mới gồm title và content
-ALTER TABLE knowledge_base 
-ADD COLUMN IF NOT EXISTS search_text TEXT 
-GENERATED ALWAYS AS (title || ' ' || content) STORED;
-
--- 2. Tạo Index trên cột đơn này
-DROP INDEX IF EXISTS idx_kb_bm25;
-CREATE INDEX idx_kb_bm25 
-    ON knowledge_base 
-    USING bm25(search_text) 
-    WITH (text_config = 'simple');
-
--- Vector Index (HNSW tốt hơn IVFFlat cho cosine)
+-- Vector Index (HNSW)
 CREATE INDEX idx_kb_embedding 
     ON knowledge_base 
     USING hnsw (embedding vector_cosine_ops)
-    WITH (m = 16, ef_construction = 64);
+    WITH (m = 16, ef_construction = 128); -- Tăng lên 128 để RAG chính xác hơn
 
--- Index hỗ trợ filter nhanh
-CREATE INDEX idx_kb_branch_active 
-    ON knowledge_base (branch_id, is_active);
-
-CREATE INDEX idx_kb_category 
-    ON knowledge_base (category) WHERE is_active = TRUE;
+-- Filter Index
+CREATE INDEX idx_kb_filter ON knowledge_base (branch_id, category) WHERE is_active = TRUE;
 
 
--- ============================================================
--- HÀM HỖ TRỢ UNACCENT CHO TIẾNG VIỆT
--- ============================================================
-CREATE OR REPLACE FUNCTION public.f_unaccent(text)
-  RETURNS text AS
-$func$
-SELECT public.unaccent('public.unaccent', $1)
-$func$ LANGUAGE sql IMMUTABLE;
+-- BM25 Index (ParadeDB)
+CREATE INDEX knowledge_base_search_bm25_index ON knowledge_base
+USING bm25 (id_kb, title, content)
+WITH (
+    key_field = 'id_kb',
+    text_fields = '{
+        "title":   {"tokenizer": {"type": "icu"}},
+        "content": {"tokenizer": {"type": "icu"}}
+    }'
+);
 
--- ============================================================
--- HYBRID SEARCH FUNCTION (BM25 + Vector + RRF)
--- ============================================================
-CREATE OR REPLACE FUNCTION hybrid_search_kb(
-    search_query     TEXT,
-    query_embedding  VECTOR(1024),
-    top_k            INT DEFAULT 10,
-    rrf_k            INT DEFAULT 60,
-    branch_uuid      UUID DEFAULT NULL
-)
-RETURNS TABLE (
-    id           UUID,
-    title        TEXT,
-    content      TEXT,
-    score        FLOAT,
-    bm25_rank    INT,
-    vector_rank  INT
-)
-LANGUAGE sql
-STABLE
-AS $$
-WITH 
-bm25_results AS (
-    SELECT 
-        id,
-        ROW_NUMBER() OVER (ORDER BY (title || ' ' || content) <@> search_query) AS bm25_rank
-    FROM knowledge_base
-    WHERE is_active = TRUE
-      AND (branch_uuid IS NULL OR branch_id = branch_uuid OR branch_id IS NULL)
-    ORDER BY (title || ' ' || content) <@> search_query
-    LIMIT 50
-),
-vector_results AS (
-    SELECT 
-        id,
-        ROW_NUMBER() OVER (ORDER BY embedding <=> query_embedding) AS vector_rank
-    FROM knowledge_base
-    WHERE is_active = TRUE 
-      AND embedding IS NOT NULL
-      AND (branch_uuid IS NULL OR branch_id = branch_uuid OR branch_id IS NULL)
-    ORDER BY embedding <=> query_embedding
-    LIMIT 50
-),
-fused AS (
-    SELECT 
-        COALESCE(b.id, v.id) AS id,
-        COALESCE(1.0 / (rrf_k::float + b.bm25_rank), 0) + 
-        COALESCE(1.0 / (rrf_k::float + v.vector_rank), 0) AS score,
-        b.bm25_rank,
-        v.vector_rank
-    FROM bm25_results b
-    FULL OUTER JOIN vector_results v ON b.id = v.id
-)
-SELECT 
-    k.id,
-    k.title,
-    k.content,
-    f.score,
-    f.bm25_rank,
-    f.vector_rank
-FROM fused f
-JOIN knowledge_base k ON k.id = f.id
-ORDER BY f.score DESC
-LIMIT top_k;
-$$;
+
+CREATE INDEX memory_entries_search_bm25_index ON memory_entries
+USING bm25 (id_mem, content_text)
+WITH (
+    key_field = 'id_mem',
+    text_fields = '{
+        "content_text": {"tokenizer": {"type": "icu"}}
+    }'
+);

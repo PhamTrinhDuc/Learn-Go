@@ -1,18 +1,13 @@
 services:
   # PostgreSQL with pgvector extension
   postgres:
-    # image: pgvector/pgvector:pg16
-    build:
-      context: ./docker.config
-      dockerfile: postgres.Dockerfile
-    # container_name: mcp-postgres
+    image: paradedb/paradedb:latest
     environment:
       POSTGRES_USER: mcp_user
       POSTGRES_PASSWORD: mcp_password
       POSTGRES_DB: salon_chain
     ports:
       - "5433:5432"
-    command: ["postgres", "-c", "shared_preload_libraries=pg_textsearch"]
     volumes:
       # Sửa từ /var/lib/postgresql/data thành /var/lib/postgresql
       - postgres_data:/var/lib/postgresql

@@ -5,13 +5,14 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"google.golang.org/adk/session"
 )
 
 func setUpRedisState() redisState {
 	return redisState{
 		service: redisSvc,
 		client:  redisSvc.client,
-		key:     redisSvc.appStateKey(appName),
+		key:     redisSvc.sessionKey(appName, userID, sessionID),
 		ttl:     redisSvc.ttl,
 		appName: appName,
 		userID:  userID,
@@ -35,22 +36,32 @@ func TestMethodsState(t *testing.T) {
 
 	t.Run(getName("check app state"), func(t *testing.T) {
 		keyApp := redisState.service.appStateKey(appName)
-		err := redisState.Set(
-			keyApp,
-			map[string]any{
-				"app:theme": "dark",
-				"app:lang":  "vi",
+
+		// create request
+		req := session.CreateRequest{
+			AppName:   appName,
+			UserID:    userID,
+			SessionID: sessionID,
+			State: map[string]any{
+				session.KeyPrefixUser + "name": userName,
+				session.KeyPrefixApp + "theme": theme,
+				"session_id":                   sessionID,
 			},
+		}
+		_, err := redisState.service.Create(ctx, &req)
+		assert.NoError(t, err)
+
+		// set state
+		err = redisState.Set(
+			"app:theme", "dark",
 		)
 		assert.NoError(t, err)
 
-		data, err := redisState.client.HGet(ctx, keyApp, "app:theme").Result()
+		// get state
+		data, err := redisState.client.HGet(ctx, keyApp, "theme").Result()
 		assert.NoError(t, err)
 
-		assert.Equal(t, map[string]any{
-			"app:theme": "dark",
-			"app:lang":  "vi",
-		}, data)
+		assert.Equal(t, "\"dark\"", data)
 
 		redisState.service.FlushDB(ctx)
 	})

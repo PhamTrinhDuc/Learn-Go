@@ -2,18 +2,20 @@ package postgres
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
 	"fmt"
+	"log"
 	"strings"
 	"time"
 
-	_ "github.com/lib/pq"
+	"multi-agent/internal/memory/types"
+
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/pgvector/pgvector-go"
 	"google.golang.org/adk/memory"
 	"google.golang.org/adk/session"
 	"google.golang.org/genai"
-
-	mtypes "multi-agent/internal/memory/types"
 )
 
 // EmbeddingModel is an interface for generating embeddings from text.
@@ -24,9 +26,14 @@ type EmbeddingModel interface {
 
 // PostgresMemoryService implements memory.Service using PostgreSQL with pgvector.
 type PostgresMemoryService struct {
-	db             *sql.DB
+	pool           *pgxpool.Pool
 	embeddingModel EmbeddingModel
 	embeddingDim   int
+	topKBM25       int
+	topKVector     int
+	topKHybrid     int
+	weightBM25     float64
+	weightVector   float64
 }
 
 // PostgresMemoryServiceConfig holds configuration for PostgresMemoryService.
@@ -36,19 +43,30 @@ type PostgresMemoryServiceConfig struct {
 	ConnString string
 	// EmbeddingModel is used to generate embeddings for semantic search (optional)
 	EmbeddingModel EmbeddingModel
+	topKBM25       int
+	topKVector     int
+	topKHybrid     int
+	weightBM25     float64
+	weightVector   float64
 }
 
-// NewPostgresMemoryService creates a new PostgreSQL-backed memory service.
 func NewPostgresMemoryService(ctx context.Context, cfg PostgresMemoryServiceConfig) (*PostgresMemoryService, error) {
-	db, err := sql.Open("postgres", cfg.ConnString)
+	// 1. parse config
+	poolConfig, err := pgxpool.ParseConfig(cfg.ConnString)
 	if err != nil {
-		return nil, fmt.Errorf("failed to open database: %w", err)
+		return nil, fmt.Errorf("Failed to parse connection string: %w", err)
 	}
 
-	if err := db.PingContext(ctx); err != nil {
-		return nil, fmt.Errorf("failed to connect to database: %w", err)
+	// 2. Create pool
+	pool, err := pgxpool.NewWithConfig(ctx, poolConfig)
+	if err != nil {
+		return nil, fmt.Errorf("Failed to create connection pool: %w", err)
 	}
-
+	// 3. Test connection
+	if err := pool.Ping(ctx); err != nil {
+		return nil, fmt.Errorf("Failed ping to database %w", err)
+	}
+	// 4. Init embedding dimension
 	embeddingDim := 0
 	if cfg.EmbeddingModel != nil {
 		embeddingDim = cfg.EmbeddingModel.Dimension()
@@ -62,134 +80,53 @@ func NewPostgresMemoryService(ctx context.Context, cfg PostgresMemoryServiceConf
 		}
 	}
 
-	svc := &PostgresMemoryService{
-		db:             db,
-		embeddingModel: cfg.EmbeddingModel,
-		embeddingDim:   embeddingDim,
-	}
-
-	if err := svc.initSchema(ctx); err != nil {
-		return nil, fmt.Errorf("failed to initialize schema: %w", err)
-	}
-
-	return svc, nil
-}
-
-// initSchema creates the necessary tables and extensions.
-func (s *PostgresMemoryService) initSchema(ctx context.Context) error {
-	// Base schema without vector column
-	baseSchema := `
-		-- Memory entries table
-		CREATE TABLE IF NOT EXISTS memory_entries (
-			id SERIAL PRIMARY KEY,
-			app_name VARCHAR(255) NOT NULL,
-			user_id VARCHAR(255) NOT NULL,
-			session_id VARCHAR(255) NOT NULL,
-			event_id VARCHAR(255) NOT NULL,
-			author VARCHAR(255),
-			content JSONB NOT NULL,
-			content_text TEXT NOT NULL,
-			timestamp TIMESTAMPTZ NOT NULL,
-			created_at TIMESTAMPTZ DEFAULT NOW(),
-			UNIQUE(app_name, user_id, session_id, event_id)
-		);
-
-		-- Indexes for efficient querying
-		CREATE INDEX IF NOT EXISTS idx_memory_app_user ON memory_entries(app_name, user_id);
-		CREATE INDEX IF NOT EXISTS idx_memory_session ON memory_entries(session_id);
-		CREATE INDEX IF NOT EXISTS idx_memory_timestamp ON memory_entries(timestamp);
-		CREATE INDEX IF NOT EXISTS idx_memory_content_text ON memory_entries USING gin(to_tsvector('english', content_text));
-	`
-
-	if _, err := s.db.ExecContext(ctx, baseSchema); err != nil {
-		return fmt.Errorf("failed to create base schema: %w", err)
-	}
-
-	// Add vector column if embedding model is configured
-	if s.embeddingDim > 0 {
-		vectorSchema := fmt.Sprintf(`
-			-- Enable pgvector extension
-			CREATE EXTENSION IF NOT EXISTS vector;
-
-			-- Add embedding column if not exists
-			DO $$
-			BEGIN
-				IF NOT EXISTS (
-					SELECT 1 FROM information_schema.columns 
-					WHERE table_name = 'memory_entries' AND column_name = 'embedding'
-				) THEN
-					ALTER TABLE memory_entries ADD COLUMN embedding vector(%d);
-				END IF;
-			END $$;
-
-			-- Vector similarity index (IVFFlat for approximate nearest neighbor)
-			DO $$
-			BEGIN
-				IF NOT EXISTS (
-					SELECT 1 FROM pg_indexes WHERE indexname = 'idx_memory_embedding'
-				) THEN
-					CREATE INDEX idx_memory_embedding ON memory_entries 
-					USING ivfflat (embedding vector_cosine_ops) WITH (lists = 100);
-				END IF;
-			END $$;
-		`, s.embeddingDim)
-
-		if _, err := s.db.ExecContext(ctx, vectorSchema); err != nil {
-			return fmt.Errorf("failed to create vector schema: %w", err)
-		}
-	}
-
-	return nil
+	// 5. Return DB{pool}
+	return &PostgresMemoryService{pool: pool, embeddingDim: embeddingDim, embeddingModel: cfg.EmbeddingModel}, nil
 }
 
 // AddSessionToMemory extracts memory entries from a session and stores them.
 func (s *PostgresMemoryService) AddSessionToMemory(ctx context.Context, sess session.Session) error {
 	events := sess.Events()
 	if events == nil || events.Len() == 0 {
+		log.Printf("No events found in session to add memory %s", sess.ID())
 		return nil
 	}
 
-	tx, err := s.db.BeginTx(ctx, nil)
+	tx, err := s.pool.Begin(ctx)
 	if err != nil {
+		log.Printf("Failed to begin transaction: %v", err)
 		return fmt.Errorf("failed to begin transaction: %w", err)
 	}
-	defer tx.Rollback()
+	defer tx.Rollback(ctx)
 
-	// Prepare statement based on whether we have embeddings
-	var stmt *sql.Stmt
+	var query string
+
 	if s.embeddingModel != nil {
-		stmt, err = tx.PrepareContext(ctx, `
+		query = `
 			INSERT INTO memory_entries (app_name, user_id, session_id, event_id, author, content, content_text, embedding, timestamp)
 			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 			ON CONFLICT (app_name, user_id, session_id, event_id) DO UPDATE 
 			SET content = EXCLUDED.content, content_text = EXCLUDED.content_text, embedding = EXCLUDED.embedding
-		`)
+		`
 	} else {
-		stmt, err = tx.PrepareContext(ctx, `
+		query = `
 			INSERT INTO memory_entries (app_name, user_id, session_id, event_id, author, content, content_text, timestamp)
 			VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 			ON CONFLICT (app_name, user_id, session_id, event_id) DO UPDATE 
 			SET content = EXCLUDED.content, content_text = EXCLUDED.content_text
-		`)
+		`
 	}
-	if err != nil {
-		return fmt.Errorf("failed to prepare statement: %w", err)
-	}
-	defer stmt.Close()
 
 	for event := range events.All() {
 		if event.Content == nil || len(event.Content.Parts) == 0 {
 			continue
 		}
-
-		// Extract text content
 		text := extractTextFromContent(event.Content)
 		if text == "" {
 			continue
 		}
 
-		// Serialize content to JSON
-		contentJSON, err := json.Marshal(event.Content)
+		contenJson, err := json.Marshal(event.Content)
 		if err != nil {
 			continue
 		}
@@ -204,410 +141,296 @@ func (s *PostgresMemoryService) AddSessionToMemory(ctx context.Context, sess ses
 			eventID = fmt.Sprintf("%s-%d", event.InvocationID, timestamp.UnixNano())
 		}
 
+		var embedding interface{}
 		if s.embeddingModel != nil {
-			// Generate embedding
-			var embeddingStr *string
-			embedding, err := s.embeddingModel.Embed(ctx, text)
-			if err == nil && len(embedding) > 0 {
-				embStr := vectorToString(embedding)
-				embeddingStr = &embStr
+			embededContent, err := s.embeddingModel.Embed(ctx, text)
+			if err != nil {
+				log.Printf("Failed to generate embedding: %v", err)
+				continue
 			}
+			embedding = pgvector.NewVector(embededContent)
 
-			_, err = stmt.ExecContext(ctx,
+			err = tx.QueryRow(
+				ctx,
+				query,
 				sess.AppName(),
 				sess.UserID(),
 				sess.ID(),
 				eventID,
 				event.Author,
-				contentJSON,
+				contenJson,
 				text,
-				embeddingStr,
+				embedding,
 				timestamp,
-			)
+			).Scan()
+			if err != nil {
+				log.Printf("Failed to insert memory entry: %v", err)
+				continue
+			}
 		} else {
-			_, err = stmt.ExecContext(ctx,
+			err = tx.QueryRow(
+				ctx,
+				query,
 				sess.AppName(),
 				sess.UserID(),
 				sess.ID(),
 				eventID,
 				event.Author,
-				contentJSON,
+				contenJson,
 				text,
 				timestamp,
-			)
-		}
-		if err != nil {
-			// Log but continue with other events
-			continue
+			).Scan()
+			if err != nil {
+				log.Printf("Failed to insert memory entry: %v", err)
+				continue
+			}
 		}
 	}
-
-	return tx.Commit()
+	return tx.Commit(ctx)
 }
 
-// SearchMemory finds relevant memory entries for a query.
 func (s *PostgresMemoryService) SearchMemory(ctx context.Context, req *memory.SearchRequest) (*memory.SearchResponse, error) {
-	var memories []memory.Entry
-	var err error
-
-	// If we have an embedding model and a query, try vector search first
-	if s.embeddingModel != nil && req.Query != "" {
-		embedding, embErr := s.embeddingModel.Embed(ctx, req.Query)
-		if embErr == nil && len(embedding) > 0 {
-			memories, err = s.searchByVector(ctx, req, embedding)
-			if err != nil {
-				return nil, err
-			}
-		}
-	}
-
-	// Fallback to text search if no results or no embedding model
-	if len(memories) == 0 && req.Query != "" {
-		memories, err = s.searchByText(ctx, req)
+	var embedding []float32
+	if s.embeddingModel != nil {
+		var err error
+		embedding, err = s.embeddingModel.Embed(ctx, req.Query)
 		if err != nil {
-			return nil, err
+			log.Printf("Failed to generate embedding: %v", err)
+			return nil, fmt.Errorf("failed to generate embedding: %w", err)
 		}
-	}
-
-	// If still no results and query is empty, return recent entries
-	if len(memories) == 0 {
-		memories, err = s.searchRecent(ctx, req)
+		memories, err := s.HybridSearch(ctx, req, embedding, s.topKBM25, s.topKVector, s.topKHybrid, s.weightBM25, s.weightVector)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("failed to search memory: %w", err)
 		}
+		return &memory.SearchResponse{Memories: memories}, nil
+	}
+	memories, err := s.SearchByVector(ctx, req, embedding, s.topKVector)
+	if err != nil {
+		return nil, fmt.Errorf("failed to search memory: %w", err)
 	}
 
 	return &memory.SearchResponse{Memories: memories}, nil
 }
 
-// SearchWithID finds relevant memory entries including their database IDs.
-func (s *PostgresMemoryService) SearchWithID(ctx context.Context, req *memory.SearchRequest) ([]mtypes.EntryWithID, error) {
-	var memories []mtypes.EntryWithID
-	var err error
-
-	if s.embeddingModel != nil && req.Query != "" {
-		embedding, embErr := s.embeddingModel.Embed(ctx, req.Query)
-		if embErr == nil && len(embedding) > 0 {
-			memories, err = s.searchByVectorWithID(ctx, req, embedding)
-			if err != nil {
-				return nil, err
-			}
-		}
-	}
-
-	if len(memories) == 0 && req.Query != "" {
-		memories, err = s.searchByTextWithID(ctx, req)
-		if err != nil {
-			return nil, err
-		}
-	}
-
-	if len(memories) == 0 {
-		memories, err = s.searchRecentWithID(ctx, req)
-		if err != nil {
-			return nil, err
-		}
-	}
-
-	return memories, nil
-}
-
-// searchByVectorWithID performs semantic similarity search returning IDs.
-func (s *PostgresMemoryService) searchByVectorWithID(ctx context.Context, req *memory.SearchRequest, embedding []float32) ([]mtypes.EntryWithID, error) {
+// searchByText performs full-text search using PostgreSQL's tsvector.
+func (s *PostgresMemoryService) SearchByText(ctx context.Context, req *memory.SearchRequest, topk int) ([]memory.Entry, error) {
 	query := `
-		SELECT id, content, author, timestamp
-		FROM memory_entries
-		WHERE app_name = $1 AND user_id = $2 AND embedding IS NOT NULL
-		ORDER BY embedding <=> $3
-		LIMIT 10
-	`
-
-	embeddingStr := vectorToString(embedding)
-	rows, err := s.db.QueryContext(ctx, query, req.AppName, req.UserID, embeddingStr)
-	if err != nil {
-		return nil, fmt.Errorf("failed to search by vector: %w", err)
-	}
-	defer rows.Close()
-
-	return s.scanMemoriesWithID(rows)
-}
-
-// searchByTextWithID performs full-text search returning IDs.
-func (s *PostgresMemoryService) searchByTextWithID(ctx context.Context, req *memory.SearchRequest) ([]mtypes.EntryWithID, error) {
-	query := `
-		SELECT id, content, author, timestamp
-		FROM memory_entries
+		SELECT content, author, timestamp 
+		FROM memory_entries 
 		WHERE app_name = $1 AND user_id = $2
-		AND to_tsvector('english', content_text) @@ plainto_tsquery('english', $3)
-		ORDER BY ts_rank(to_tsvector('english', content_text), plainto_tsquery('english', $3)) DESC,
-		         timestamp DESC
-		LIMIT 10
+		AND id @@@ paradedb.parse($3)
+		ORDER BY paradedb.score(id) DESC, timestamp DESC
+		LIMIT $4
 	`
 
-	rows, err := s.db.QueryContext(ctx, query, req.AppName, req.UserID, req.Query)
+	rows, err := s.pool.Query(ctx, query, req.AppName, req.UserID, req.Query, topk)
 	if err != nil {
-		return nil, fmt.Errorf("failed to search by text: %w", err)
+		return nil, fmt.Errorf("failed to query memory: %w", err)
 	}
 	defer rows.Close()
 
-	return s.scanMemoriesWithID(rows)
-}
-
-// searchRecentWithID returns the most recent memory entries with IDs.
-func (s *PostgresMemoryService) searchRecentWithID(ctx context.Context, req *memory.SearchRequest) ([]mtypes.EntryWithID, error) {
-	query := `
-		SELECT id, content, author, timestamp
-		FROM memory_entries
-		WHERE app_name = $1 AND user_id = $2
-		ORDER BY timestamp DESC
-		LIMIT 10
-	`
-
-	rows, err := s.db.QueryContext(ctx, query, req.AppName, req.UserID)
-	if err != nil {
-		return nil, fmt.Errorf("failed to search recent: %w", err)
-	}
-	defer rows.Close()
-
-	return s.scanMemoriesWithID(rows)
-}
-
-// scanMemoriesWithID converts database rows to memory entries with IDs.
-func (s *PostgresMemoryService) scanMemoriesWithID(rows *sql.Rows) ([]mtypes.EntryWithID, error) {
-	var memories []mtypes.EntryWithID
-
-	for rows.Next() {
-		var id int
-		var contentJSON []byte
-		var author sql.NullString
-		var timestamp time.Time
-
-		if err := rows.Scan(&id, &contentJSON, &author, &timestamp); err != nil {
-			continue
-		}
-
-		var content genai.Content
-		if err := json.Unmarshal(contentJSON, &content); err != nil {
-			continue
-		}
-
-		entry := mtypes.EntryWithID{
-			ID:        id,
-			Content:   &content,
-			Timestamp: timestamp,
-		}
-		if author.Valid {
-			entry.Author = author.String
-		}
-
-		memories = append(memories, entry)
-	}
-
-	return memories, rows.Err()
+	return scanMemories(rows)
 }
 
 // searchByVector performs semantic similarity search.
-func (s *PostgresMemoryService) searchByVector(ctx context.Context, req *memory.SearchRequest, embedding []float32) ([]memory.Entry, error) {
+func (s *PostgresMemoryService) SearchByVector(ctx context.Context, req *memory.SearchRequest, embedding []float32, topK int) ([]memory.Entry, error) {
 	query := `
-		SELECT content, author, timestamp
-		FROM memory_entries
-		WHERE app_name = $1 AND user_id = $2 AND embedding IS NOT NULL
-		ORDER BY embedding <=> $3
-		LIMIT 10
+		SELECT 
+			content, author, timestamp 
+		FROM memory_entries 
+		WHERE 
+			app_name = $1 AND user_id = $2 AND embedding IS NOT NULL
+		ORDER BY embedding <=> $3::vector
+        LIMIT $4
 	`
 
-	embeddingStr := vectorToString(embedding)
-	rows, err := s.db.QueryContext(ctx, query, req.AppName, req.UserID, embeddingStr)
+	rows, err := s.pool.Query(ctx, query, req.AppName, req.UserID, embedding, topK)
 	if err != nil {
-		return nil, fmt.Errorf("failed to search by vector: %w", err)
+		return nil, fmt.Errorf("failed to query memory: %w", err)
 	}
 	defer rows.Close()
 
-	return s.scanMemories(rows)
+	return scanMemories(rows)
 }
 
-// searchByText performs full-text search using PostgreSQL's tsvector.
-func (s *PostgresMemoryService) searchByText(ctx context.Context, req *memory.SearchRequest) ([]memory.Entry, error) {
+func (s *PostgresMemoryService) SearchWithID(ctx context.Context, req *memory.SearchRequest) ([]types.EntryWithID, error) {
 	query := `
-		SELECT content, author, timestamp
-		FROM memory_entries
+		SELECT id_mem, content, author, timestamp 
+		FROM memory_entries 
 		WHERE app_name = $1 AND user_id = $2
-		AND to_tsvector('english', content_text) @@ plainto_tsquery('english', $3)
-		ORDER BY ts_rank(to_tsvector('english', content_text), plainto_tsquery('english', $3)) DESC,
-		         timestamp DESC
-		LIMIT 10
+		ORDER BY id_mem DESC
 	`
 
-	rows, err := s.db.QueryContext(ctx, query, req.AppName, req.UserID, req.Query)
+	rows, err := s.pool.Query(ctx, query, req.AppName, req.UserID)
 	if err != nil {
-		return nil, fmt.Errorf("failed to search by text: %w", err)
+		return nil, fmt.Errorf("failed to query memory: %w", err)
 	}
 	defer rows.Close()
 
-	return s.scanMemories(rows)
-}
-
-// searchRecent returns the most recent memory entries.
-func (s *PostgresMemoryService) searchRecent(ctx context.Context, req *memory.SearchRequest) ([]memory.Entry, error) {
-	query := `
-		SELECT content, author, timestamp
-		FROM memory_entries
-		WHERE app_name = $1 AND user_id = $2
-		ORDER BY timestamp DESC
-		LIMIT 10
-	`
-
-	rows, err := s.db.QueryContext(ctx, query, req.AppName, req.UserID)
-	if err != nil {
-		return nil, fmt.Errorf("failed to search recent: %w", err)
-	}
-	defer rows.Close()
-
-	return s.scanMemories(rows)
-}
-
-// scanMemories converts database rows to memory entries.
-func (s *PostgresMemoryService) scanMemories(rows *sql.Rows) ([]memory.Entry, error) {
-	var memories []memory.Entry
-
+	var entries []types.EntryWithID
 	for rows.Next() {
-		var contentJSON []byte
-		var author sql.NullString
-		var timestamp time.Time
-
-		if err := rows.Scan(&contentJSON, &author, &timestamp); err != nil {
-			continue
+		var entry types.EntryWithID
+		if err := rows.Scan(&entry.ID, &entry.Content, &entry.Author, &entry.Timestamp); err != nil {
+			return nil, fmt.Errorf("failed to scan memory entry: %w", err)
 		}
-
-		var content genai.Content
-		if err := json.Unmarshal(contentJSON, &content); err != nil {
-			continue
-		}
-
-		entry := memory.Entry{
-			Content:   &content,
-			Timestamp: timestamp,
-		}
-		if author.Valid {
-			entry.Author = author.String
-		}
-
-		memories = append(memories, entry)
+		entries = append(entries, entry)
 	}
 
-	return memories, rows.Err()
+	return entries, nil
 }
 
-// UpdateMemory updates the content of a memory entry by ID, scoped to app and user.
-func (s *PostgresMemoryService) UpdateMemory(ctx context.Context, appName, userID string, entryID int, newContent string) error {
+func (s *PostgresMemoryService) HybridSearch(ctx context.Context, req *memory.SearchRequest, embedding []float32, topKBm25 int, topKVector int, topkFinal int, weightBM25 float64, weightVector float64) ([]memory.Entry, error) {
+	query := `
+		WITH 
+			bm25_results AS (
+				SELECT id, ROW_NUMBER() OVER (ORDER BY paradedb.score(id) DESC) AS rank 
+				FROM memory_entries 
+				WHERE app_name=$1 AND user_id=$2 
+					AND id_mem @@@ paradedb.parse($3) 
+				LIMIT $4
+			),
+			vector_results AS (
+				SELECT id, ROW_NUMBER() OVER (ORDER BY embedding <=> $5::vector) AS rank 
+				FROM memory_entries 
+				WHERE app_name=$1 AND user_id=$2 AND embedding IS NOT NULL 
+				ORDER BY embedding <=> $5
+				LIMIT %6
+			),
+		SELECT m.content, m.author, m.timestamp
+		FROM memory_entries m
+		JOIN (
+			SELECT COALESCE(b.id, v.id) AS id,
+				(COALESCE(1.0 / (60 + b.rank), 0) * %7 + 
+					COALESCE(1.0 / (60 + v.rank), 0) * %8) AS combined_score
+			FROM bm25_results b
+			FULL OUTER JOIN vector_results v ON b.id = v.id
+		) fused ON m.id = fused.id
+		ORDER BY fused.combined_score DESC, m.timestamp DESC
+		LIMIT %9
+	`
+
+	rows, err := s.pool.Query(ctx, query, req.AppName, req.UserID, req.Query, embedding, topKBm25, topKVector, weightBM25, weightVector, topkFinal)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query memory: %w", err)
+	}
+	defer rows.Close()
+
+	return scanMemories(rows)
+}
+
+func (s *PostgresMemoryService) UpdateMemory(ctx context.Context, appName string, userID string, entryID int, newContent string) error {
 	if newContent == "" {
 		return fmt.Errorf("content cannot be empty")
 	}
+
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
 
 	content := &genai.Content{
 		Parts: []*genai.Part{{Text: newContent}},
 		Role:  "assistant",
 	}
-	contentJSON, err := json.Marshal(content)
+
+	contentJson, err := json.Marshal(content)
 	if err != nil {
+		log.Printf("failed to marshal content: %v\n", err)
 		return fmt.Errorf("failed to marshal content: %w", err)
 	}
 
-	var result sql.Result
 	if s.embeddingModel != nil {
-		var embeddingStr *string
-		embedding, embErr := s.embeddingModel.Embed(ctx, newContent)
-		if embErr == nil && len(embedding) > 0 {
-			embStr := vectorToString(embedding)
-			embeddingStr = &embStr
+		var embedding interface{}
+		embededContent, err := s.embeddingModel.Embed(ctx, newContent)
+		if err != nil {
+			log.Printf("failed to generate embedding: %v\n", err)
+			return fmt.Errorf("failed to generate embedding: %w", err)
 		}
-		result, err = s.db.ExecContext(ctx,
-			`UPDATE memory_entries SET content = $1, content_text = $2, embedding = $3 WHERE id = $4 AND app_name = $5 AND user_id = $6`,
-			contentJSON, newContent, embeddingStr, entryID, appName, userID,
-		)
+		embedding = pgvector.NewVector(embededContent)
+
+		query := `
+			UPDATE memory_entries
+			SET content = $1, content_text = $2, embedding = $3, timestamp = NOW()
+			WHERE app_name = $4 AND id = $5 AND user_id = $6
+		`
+		err = tx.QueryRow(ctx, query, contentJson, newContent, embedding, appName, entryID, userID).Scan()
+		if err != nil {
+			log.Printf("failed to update memory: %v\n", err)
+			return fmt.Errorf("failed to update memory: %w", err)
+		}
 	} else {
-		result, err = s.db.ExecContext(ctx,
-			`UPDATE memory_entries SET content = $1, content_text = $2 WHERE id = $3 AND app_name = $4 AND user_id = $5`,
-			contentJSON, newContent, entryID, appName, userID,
-		)
+		query := `
+			UPDATE memory_entries
+			SET content = $1, content_text = $2, timestamp = NOW()
+			WHERE app_name = $3 AND id = $4 AND user_id = $5
+		`
+		err = tx.QueryRow(ctx, query, contentJson, newContent, appName, entryID, userID).Scan()
+		if err != nil {
+			log.Printf("failed to update memory: %v\n", err)
+			return fmt.Errorf("failed to update memory: %w", err)
+		}
 	}
-	if err != nil {
-		return fmt.Errorf("failed to update memory: %w", err)
-	}
-
-	rowsAffected, err := result.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("failed to check rows affected: %w", err)
-	}
-	if rowsAffected == 0 {
-		return fmt.Errorf("memory entry not found")
-	}
-
-	return nil
+	return tx.Commit(ctx)
 }
 
-// DeleteMemory deletes a memory entry by ID, scoped to app and user.
-func (s *PostgresMemoryService) DeleteMemory(ctx context.Context, appName, userID string, entryID int) error {
-	result, err := s.db.ExecContext(ctx,
-		`DELETE FROM memory_entries WHERE id = $1 AND app_name = $2 AND user_id = $3`,
-		entryID, appName, userID,
-	)
+func (s *PostgresMemoryService) DeleteMemory(ctx context.Context, appName string, userID string, entryID int) error {
+	query := `
+		DELETE FROM memory_entries 
+		WHERE app_name = $1 AND id = $2 AND user_id = $3
+	`
+	result, err := s.pool.Exec(ctx, query, appName, entryID, userID)
 	if err != nil {
 		return fmt.Errorf("failed to delete memory: %w", err)
 	}
-
-	rowsAffected, err := result.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("failed to check rows affected: %w", err)
+	if result.RowsAffected() == 0 {
+		return fmt.Errorf("no memory found with id %d for user %s in app %s", entryID, userID, appName)
 	}
-	if rowsAffected == 0 {
-		return fmt.Errorf("memory entry not found")
-	}
-
 	return nil
 }
 
+func scanMemories(rows pgx.Rows) ([]memory.Entry, error) {
+	var entries []memory.Entry
+	for rows.Next() {
+		var contentJson []byte
+		var author string
+		var timestamp time.Time
+
+		if err := rows.Scan(&contentJson, &author, &timestamp); err != nil {
+			log.Println("failed to scan row for vector search: %w", err)
+			continue
+		}
+
+		var content genai.Content
+		if err := json.Unmarshal(contentJson, &content); err != nil {
+			log.Println("failed to unmarshal content: %w", err)
+			return nil, fmt.Errorf("failed to unmarshal content: %w", err)
+		}
+		entry := memory.Entry{
+			Author:    author,
+			Content:   &content,
+			Timestamp: timestamp,
+		}
+		entries = append(entries, entry)
+	}
+	return entries, nil
+}
+
 // Close closes the database connection.
-func (s *PostgresMemoryService) Close() error {
-	return s.db.Close()
+func (s *PostgresMemoryService) Close() {
+	s.pool.Close()
 }
 
-// DB returns the underlying database connection for testing purposes.
-func (s *PostgresMemoryService) DB() *sql.DB {
-	return s.db
-}
-
-// extractTextFromContent extracts text from a genai.Content.
 func extractTextFromContent(content *genai.Content) string {
 	if content == nil {
 		return ""
 	}
 	var parts []string
 	for _, part := range content.Parts {
-		if part.Text != "" {
-			parts = append(parts, part.Text)
-		}
+		parts = append(parts, part.Text)
 	}
 	return strings.TrimSpace(strings.Join(parts, " "))
 }
 
-// vectorToString converts a float32 slice to PostgreSQL vector format.
-func vectorToString(v []float32) string {
-	if len(v) == 0 {
-		return ""
-	}
-	var sb strings.Builder
-	sb.WriteString("[")
-	for i, f := range v {
-		if i > 0 {
-			sb.WriteString(",")
-		}
-		fmt.Fprintf(&sb, "%f", f)
-	}
-	sb.WriteString("]")
-	return sb.String()
-}
-
-// Ensure interfaces are implemented
 var _ memory.Service = (*PostgresMemoryService)(nil)
-var _ mtypes.ExtendedMemoryService = (*PostgresMemoryService)(nil)
+var _ types.ExtendedMemoryService = (*PostgresMemoryService)(nil)
