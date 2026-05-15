@@ -3,8 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
-	"log"
-	"mcp-server/internal/database"
+	database "mcp-server/internal/database"
 	llm "mcp-server/internal/llm"
 	utils "mcp-server/internal/utils"
 )
@@ -90,63 +89,22 @@ func TestPostgres(query string) {
 	}
 
 	fmt.Println(contextText)
-
-	// 2. Chuẩn bị Prompt hoàn chỉnh
-	// fullPrompt := fmt.Sprintf(`
-	// Bạn là trợ lý AI thông minh. Hãy trả lời câu hỏi của người dùng một cách chính xác dựa trên thông tin được cung cấp trong phần context.
-	// Nếu thông tin trong context không đủ để trả lời, hãy nói rằng bạn không biết, đừng tự bịa ra câu trả lời.
-
-	// CÂU HỎI: %s
-
-	// CONTEXT:
-	// %s
-	// `, query, contextText)
-
-	// // 3. Gọi LLM để lấy phản hồi (dùng StreamChat để thấy kết quả ngay lập tức)
-	// fmt.Println("\n[*] Đang gửi dữ liệu cho LLM xử lý (Streaming)...")
-	// fmt.Print("\n================= LLM RESPONSE =================\n")
-
-	// aiResponse, err := model.StreamChat(ctx, fullPrompt, func(chunk string) {
-	// 	fmt.Print(chunk) // In từng từ ra màn hình ngay khi AI sinh ra
-	// })
-
-	// fmt.Println(aiResponse)
-
-	// if err != nil {
-	// 	fmt.Printf("\nLỗi khi chat với LLM: %v\n", err)
-	// 	return
-	// }
-	// fmt.Println("\n================================================")
 }
 
-func TestAIService() {
-	ctx := context.Background()
+func TestBenchmark() {
+	filePath := "../data/evals/eval_dataset.csv"
+	// err := database.GenDataset(filePath)
+	// if err != nil {
+	// 	fmt.Printf("failed to gen dataset: %s", err)
+	// }
 
-	// 1. Khởi tạo client với cấu hình mặc định (qwen3.5 & qwen3-embedding)
-	client, err := llm.NewClient(llm.DefaultConfig())
+	err := database.Evaluation(filePath, true)
 	if err != nil {
-		log.Fatal(err)
-	}
-
-	// 2. Test thử sinh Embedding
-	fmt.Println("[*] Đang thử sinh Embedding cho 1 câu văn...")
-	vectors, err := client.GenerateEmbeddings(ctx, []string{"Chào bác, tôi là AI hỗ trợ Go!"})
-	if err != nil {
-		fmt.Printf("[!] Lỗi khi sinh embedding: %v\n", err)
-	} else {
-		fmt.Printf("[OK] Đã sinh xong vector, độ dài: %d\n", len(vectors[0]))
-	}
-
-	// 3. Test thử Chat LLM
-	fmt.Println("[*] Đang hỏi Qwen2.5...")
-	resp, err := client.Chat(ctx, "Chào bạn.")
-	if err != nil {
-		fmt.Printf("[!] Lỗi khi gọi LLM: %v\n", err)
-	} else {
-		fmt.Printf("[Qwen]: %s\n", resp)
+		fmt.Println("failed to evaluaton dataset: %w", err)
 	}
 }
 
 func main() {
-	TestPostgres("Chăm sóc tóc layer thế nào?")
+	// TestPostgres("Chăm sóc tóc layer thế nào?")
+	TestBenchmark()
 }

@@ -106,18 +106,6 @@ func (db *DB) Close() {
 	db.pool.Close()
 }
 
-// SetTenantContext sets the tenant ID for row-level security
-func (db *DB) setTententContext(ctx context.Context, tx pgx.Tx) error {
-	// Note: SET commands don't support parameter binding ($1), so we use fmt.Sprintf
-	// The tenantID is validated to be a UUID by the JWT validator, so this is safe
-	query := fmt.Sprintf("SET LOCAL app.current_tenant_id = '%s'")
-	_, err := tx.Exec(ctx, query)
-	if err != nil {
-		return fmt.Errorf("failed to set tenant content: %w", err)
-	}
-	return nil
-}
-
 // BeginTx starts a new transaction with tenant context
 func (db *DB) BeginTx(ctx context.Context) (pgx.Tx, error) {
 	tx, err := db.pool.Begin(ctx)
@@ -304,7 +292,8 @@ func (db *DB) ListDocuments(ctx context.Context, limit int, offset int) ([]*Know
 		FROM knowledge_base 
 		WHERE is_active = TRUE
 		ORDER BY created_at DESC 
-		LIMIT $1 OFFSET $2
+		LIMIT (CASE WHEN $1 > 0 THEN $1 ELSE NULL END)
+		OFFSET (CASE WHEN $2 > 0 THEN $2 ELSE 0 END)
 	`
 
 	rows, err := db.pool.Query(ctx, query, limit, offset)

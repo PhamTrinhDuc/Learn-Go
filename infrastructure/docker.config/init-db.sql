@@ -227,7 +227,7 @@ CREATE TABLE knowledge_base (
     branch_id  UUID REFERENCES branch(id) ON DELETE CASCADE,  -- NULL = dùng chung
     title      VARCHAR(200) NOT NULL,
     content    TEXT NOT NULL,
-    embedding  vector(1536),                   -- OpenAI / Anthropic embedding dim
+    embedding  vector(1024),                   -- OpenAI / Anthropic embedding dim
     metadata   JSONB,
     category   VARCHAR(50),
     is_active  BOOLEAN NOT NULL DEFAULT TRUE,
@@ -260,7 +260,7 @@ CREATE TABLE agent_action_log (
 
 
 CREATE TABLE IF NOT EXISTS memory_entries (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    id         UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     app_name VARCHAR(255) NOT NULL,
     user_id VARCHAR(255) NOT NULL,
     session_id VARCHAR(255) NOT NULL,
@@ -268,6 +268,7 @@ CREATE TABLE IF NOT EXISTS memory_entries (
     author VARCHAR(255),
     content JSONB NOT NULL,
     content_text TEXT NOT NULL,
+    embedding  vector(1024),
     timestamp TIMESTAMPTZ NOT NULL,
     created_at TIMESTAMPTZ DEFAULT NOW(),
     UNIQUE(app_name, user_id, session_id, event_id)
@@ -321,9 +322,9 @@ CREATE INDEX idx_kb_filter ON knowledge_base (branch_id, category) WHERE is_acti
 
 -- BM25 Index (ParadeDB)
 CREATE INDEX knowledge_base_search_bm25_index ON knowledge_base
-USING bm25 (id_kb, title, content)
+USING bm25 (id, title, content)
 WITH (
-    key_field = 'id_kb',
+    key_field = 'id',
     text_fields = '{
         "title":   {"tokenizer": {"type": "icu"}},
         "content": {"tokenizer": {"type": "icu"}}
@@ -332,9 +333,9 @@ WITH (
 
 
 CREATE INDEX memory_entries_search_bm25_index ON memory_entries
-USING bm25 (id_mem, content_text)
+USING bm25 (id, content_text)
 WITH (
-    key_field = 'id_mem',
+    key_field = 'id',
     text_fields = '{
         "content_text": {"tokenizer": {"type": "icu"}}
     }'

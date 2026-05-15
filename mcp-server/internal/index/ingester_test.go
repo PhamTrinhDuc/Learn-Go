@@ -22,13 +22,13 @@ var configModel = llm.Config{
 	LLM: llm.ProviderConfig{
 		Provider: llm.ProviderGroq,
 		Model:    "llama-3.3-70b-versatile",
-		APIKey:   utils.GetEnvString("GROQ_API_KEY", ""),
+		APIKey:   utils.GetEnvString("GROQ_API_KEY", "abcd"),
 	},
 	Embed: llm.ProviderConfig{
-		Provider: llm.ProviderOpenAI,
-		// BaseURL:  "http://localhost:11434",
-		Model:  "text-embedding-3-small",
-		APIKey: utils.GetEnvString("OPENAI_API_KEY", ""),
+		Provider: llm.ProviderOllama,
+		BaseURL:  "http://localhost:11434",
+		Model:    "qwen3-embedding:0.6b",
+		// APIKey: utils.GetEnvString("OPENAI_API_KEY", "abcd"),
 	},
 }
 

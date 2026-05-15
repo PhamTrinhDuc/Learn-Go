@@ -97,11 +97,11 @@ func (db *DB) FullTextSearch(ctx context.Context, query string, limit int) ([]*F
 	queryString := `
 		SELECT
 			id, branch_id, title, content, metadata, created_at, updated_at,
-			ROW_NUMBER() OVER (ORDER BY paradedb.score(id_kb) DESC) AS rank
+			paradedb.score(id) AS score
 		FROM knowledge_base
 		WHERE is_active = TRUE
-		  AND id_kb @@@ paradedb.parse($1)
-		ORDER BY rank
+		  AND id @@@ paradedb.parse($1)
+		ORDER BY score DESC
 		LIMIT $2
 	`
 
@@ -161,12 +161,12 @@ func (db *DB) HybridSearch(ctx context.Context, params HybridSearchParams) ([]Hy
 		bm25_results AS (
 			SELECT 
 				id, branch_id, title, content, metadata, embedding, created_at, updated_at,
-				ROW_NUMBER() OVER (ORDER BY paradedb.score(id_kb) DESC) AS rank
+				ROW_NUMBER() OVER (ORDER BY paradedb.score(id) DESC) AS bm25_rank
 			FROM knowledge_base
 			WHERE is_active = TRUE
 			  	AND (branch_id = $2 OR branch_id IS NULL OR $2 IS NULL)
-			   	AND id_kb @@@ paradedb.parse($1)
-			ORDER BY paradedb.score(id_kb) DESC
+			   	AND id @@@ paradedb.parse($1)
+			ORDER BY paradedb.score(id) DESC
 			LIMIT 50
 		),
 
@@ -224,8 +224,8 @@ func (db *DB) HybridSearch(ctx context.Context, params HybridSearchParams) ([]Hy
 
 	rows, err := db.pool.Query(ctx, query,
 		params.Query,        // $1: text query cho BM25
-		embedding,           // $2: embedding
-		params.BranchID,     // $3: branch filter (UUID hoặc nil)
+		params.BranchID,     // $2: branch filter (UUID hoặc nil)
+		embedding,           // $3: embedding
 		params.BM25Weight,   // $4: trọng số BM25
 		params.VectorWeight, // $5: trọng số Vector
 		params.Limit,        // $6

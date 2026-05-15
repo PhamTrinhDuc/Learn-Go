@@ -81,7 +81,16 @@ func NewPostgresMemoryService(ctx context.Context, cfg PostgresMemoryServiceConf
 	}
 
 	// 5. Return DB{pool}
-	return &PostgresMemoryService{pool: pool, embeddingDim: embeddingDim, embeddingModel: cfg.EmbeddingModel}, nil
+	return &PostgresMemoryService{
+		pool:           pool,
+		embeddingDim:   embeddingDim,
+		embeddingModel: cfg.EmbeddingModel,
+		topKBM25:       cfg.topKBM25,
+		topKVector:     cfg.topKVector,
+		topKHybrid:     cfg.topKHybrid,
+		weightBM25:     cfg.weightBM25,
+		weightVector:   cfg.weightVector,
+	}, nil
 }
 
 // AddSessionToMemory extracts memory entries from a session and stores them.
@@ -150,7 +159,7 @@ func (s *PostgresMemoryService) AddSessionToMemory(ctx context.Context, sess ses
 			}
 			embedding = pgvector.NewVector(embededContent)
 
-			err = tx.QueryRow(
+			_, err = tx.Exec(
 				ctx,
 				query,
 				sess.AppName(),
@@ -162,13 +171,13 @@ func (s *PostgresMemoryService) AddSessionToMemory(ctx context.Context, sess ses
 				text,
 				embedding,
 				timestamp,
-			).Scan()
+			)
 			if err != nil {
 				log.Printf("Failed to insert memory entry: %v", err)
-				continue
+				return fmt.Errorf("Failed to insert memory entry: %v", err)
 			}
 		} else {
-			err = tx.QueryRow(
+			_, err = tx.Exec(
 				ctx,
 				query,
 				sess.AppName(),
@@ -179,10 +188,10 @@ func (s *PostgresMemoryService) AddSessionToMemory(ctx context.Context, sess ses
 				contenJson,
 				text,
 				timestamp,
-			).Scan()
+			)
 			if err != nil {
 				log.Printf("Failed to insert memory entry: %v", err)
-				continue
+				return fmt.Errorf("Failed to insert memory entry: %v", err)
 			}
 		}
 	}
@@ -190,13 +199,16 @@ func (s *PostgresMemoryService) AddSessionToMemory(ctx context.Context, sess ses
 }
 
 func (s *PostgresMemoryService) SearchMemory(ctx context.Context, req *memory.SearchRequest) (*memory.SearchResponse, error) {
-	var embedding []float32
 	if s.embeddingModel != nil {
-		var err error
-		embedding, err = s.embeddingModel.Embed(ctx, req.Query)
+		embedding, err := s.embeddingModel.Embed(ctx, req.Query)
 		if err != nil {
 			log.Printf("Failed to generate embedding: %v", err)
-			return nil, fmt.Errorf("failed to generate embedding: %w", err)
+			// Nếu embed lỗi, fallback sang text search
+			memories, err := s.SearchByText(ctx, req, s.topKBM25)
+			if err != nil {
+				return nil, err
+			}
+			return &memory.SearchResponse{Memories: memories}, nil
 		}
 		memories, err := s.HybridSearch(ctx, req, embedding, s.topKBM25, s.topKVector, s.topKHybrid, s.weightBM25, s.weightVector)
 		if err != nil {
@@ -204,9 +216,11 @@ func (s *PostgresMemoryService) SearchMemory(ctx context.Context, req *memory.Se
 		}
 		return &memory.SearchResponse{Memories: memories}, nil
 	}
-	memories, err := s.SearchByVector(ctx, req, embedding, s.topKVector)
+
+	// Nếu không có model embedding, mặc định dùng text search (BM25)
+	memories, err := s.SearchByText(ctx, req, s.topKBM25)
 	if err != nil {
-		return nil, fmt.Errorf("failed to search memory: %w", err)
+		return nil, fmt.Errorf("failed to search memory by text: %w", err)
 	}
 
 	return &memory.SearchResponse{Memories: memories}, nil
@@ -244,7 +258,7 @@ func (s *PostgresMemoryService) SearchByVector(ctx context.Context, req *memory.
         LIMIT $4
 	`
 
-	rows, err := s.pool.Query(ctx, query, req.AppName, req.UserID, embedding, topK)
+	rows, err := s.pool.Query(ctx, query, req.AppName, req.UserID, pgvector.NewVector(embedding), topK)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query memory: %w", err)
 	}
@@ -255,10 +269,10 @@ func (s *PostgresMemoryService) SearchByVector(ctx context.Context, req *memory.
 
 func (s *PostgresMemoryService) SearchWithID(ctx context.Context, req *memory.SearchRequest) ([]types.EntryWithID, error) {
 	query := `
-		SELECT id_mem, content, author, timestamp 
+		SELECT id, content, author, timestamp 
 		FROM memory_entries 
 		WHERE app_name = $1 AND user_id = $2
-		ORDER BY id_mem DESC
+		ORDER BY id DESC
 	`
 
 	rows, err := s.pool.Query(ctx, query, req.AppName, req.UserID)
@@ -283,33 +297,43 @@ func (s *PostgresMemoryService) HybridSearch(ctx context.Context, req *memory.Se
 	query := `
 		WITH 
 			bm25_results AS (
-				SELECT id, ROW_NUMBER() OVER (ORDER BY paradedb.score(id) DESC) AS rank 
+				SELECT id, ROW_NUMBER() OVER (ORDER BY paradedb.score(id) DESC) AS bm25_rank 
 				FROM memory_entries 
 				WHERE app_name=$1 AND user_id=$2 
-					AND id_mem @@@ paradedb.parse($3) 
-				LIMIT $4
+					AND id @@@ paradedb.parse($3) 
+				LIMIT $5
 			),
 			vector_results AS (
-				SELECT id, ROW_NUMBER() OVER (ORDER BY embedding <=> $5::vector) AS rank 
+				SELECT id, ROW_NUMBER() OVER (ORDER BY embedding <=> $4::vector) AS vector_rank 
 				FROM memory_entries 
 				WHERE app_name=$1 AND user_id=$2 AND embedding IS NOT NULL 
-				ORDER BY embedding <=> $5
-				LIMIT %6
-			),
+				ORDER BY embedding <=> $4::vector
+				LIMIT $6
+			)
 		SELECT m.content, m.author, m.timestamp
 		FROM memory_entries m
 		JOIN (
 			SELECT COALESCE(b.id, v.id) AS id,
-				(COALESCE(1.0 / (60 + b.rank), 0) * %7 + 
-					COALESCE(1.0 / (60 + v.rank), 0) * %8) AS combined_score
+				(COALESCE(1.0 / (60 + b.bm25_rank), 0) * $7 + 
+					COALESCE(1.0 / (60 + v.vector_rank), 0) * $8) AS combined_score
 			FROM bm25_results b
 			FULL OUTER JOIN vector_results v ON b.id = v.id
 		) fused ON m.id = fused.id
 		ORDER BY fused.combined_score DESC, m.timestamp DESC
-		LIMIT %9
+		LIMIT $9
 	`
 
-	rows, err := s.pool.Query(ctx, query, req.AppName, req.UserID, req.Query, embedding, topKBm25, topKVector, weightBM25, weightVector, topkFinal)
+	rows, err := s.pool.Query(ctx, query,
+		req.AppName,    // $1
+		req.UserID,     // $2
+		req.Query,      // $3
+		pgvector.NewVector(embedding), // $4
+		topKBm25,       // $5
+		topKVector,     // $6
+		weightBM25,     // $7
+		weightVector,   // $8
+		topkFinal,      // $9
+	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query memory: %w", err)
 	}
@@ -354,7 +378,7 @@ func (s *PostgresMemoryService) UpdateMemory(ctx context.Context, appName string
 			SET content = $1, content_text = $2, embedding = $3, timestamp = NOW()
 			WHERE app_name = $4 AND id = $5 AND user_id = $6
 		`
-		err = tx.QueryRow(ctx, query, contentJson, newContent, embedding, appName, entryID, userID).Scan()
+		_, err = tx.Exec(ctx, query, contentJson, newContent, embedding, appName, entryID, userID)
 		if err != nil {
 			log.Printf("failed to update memory: %v\n", err)
 			return fmt.Errorf("failed to update memory: %w", err)
@@ -365,7 +389,7 @@ func (s *PostgresMemoryService) UpdateMemory(ctx context.Context, appName string
 			SET content = $1, content_text = $2, timestamp = NOW()
 			WHERE app_name = $3 AND id = $4 AND user_id = $5
 		`
-		err = tx.QueryRow(ctx, query, contentJson, newContent, appName, entryID, userID).Scan()
+		_, err = tx.Exec(ctx, query, contentJson, newContent, appName, entryID, userID)
 		if err != nil {
 			log.Printf("failed to update memory: %v\n", err)
 			return fmt.Errorf("failed to update memory: %w", err)

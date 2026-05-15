@@ -9,6 +9,10 @@ import (
 	"github.com/tmc/langchaingo/llms/openai"
 )
 
+const (
+	EMBEDDING_DIM = 1024
+)
+
 func NewEmbedder(cfg ProviderConfig) (embeddings.Embedder, error) {
 	// 1. Sử dụng EmbedderClient làm interface trung gian
 	var embedClient embeddings.EmbedderClient
@@ -28,6 +32,7 @@ func NewEmbedder(cfg ProviderConfig) (embeddings.Embedder, error) {
 		opts := []openai.Option{
 			openai.WithToken(cfg.APIKey),
 			openai.WithModel(cfg.Model),
+			openai.WithEmbeddingDimensions(EMBEDDING_DIM),
 		}
 		if cfg.Provider == ProviderGroq {
 			opts = append(opts, openai.WithBaseURL("https://api.groq.com/openai/v1"))
