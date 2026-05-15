@@ -8,7 +8,7 @@ import (
 	utils "mcp-server/internal/utils"
 )
 
-func getTestDBConfig() database.DBConfig {
+func getDBConfig() database.DBConfig {
 	return database.DBConfig{
 		Host:     utils.GetEnvString("DB_HOST", "localhost"),
 		Port:     utils.GetEnvInt("DB_PORT", 5433),
@@ -21,28 +21,31 @@ func getTestDBConfig() database.DBConfig {
 	}
 }
 
-func getTestModelConfig() llm.Config {
-	return llm.Config{
-		LLM: llm.ProviderConfig{
-			Provider: llm.ProviderGroq,
-			Model:    "llama-3.3-70b-versatile",
-			APIKey:   utils.GetEnvString("GROQ_API_KEY", ""),
-		},
-		Embed: llm.ProviderConfig{
-			Provider: llm.ProviderOllama,
-			BaseURL:  "http://localhost:11434",
-			Model:    "qwen3-embedding:0.6b",
-		},
+func getEmbeddingConfig() llm.OpenAICompatibleConfig {
+	return llm.OpenAICompatibleConfig{
+		APIKey:  utils.GetEnvString("OPENAI_API_KEY", "abcd"),
+		Model:   utils.GetEnvString("EMBEDDING_MODEL", "text-embedding-3-small"),
+		BaseURL: utils.GetEnvString("BASE_URL_OPENAI", "https://api.openai.com/v1"),
 	}
 }
 
-func setupTest() (*database.DB, *llm.Client, error) {
-	cfg := getTestDBConfig()
-	db, err := database.NewDB(context.Background(), cfg)
+func getLLmConfig() llm.OpenAICompatibleConfig {
+	return llm.OpenAICompatibleConfig{
+		Model:   "llama-3.3-70b-versatile",
+		APIKey:  utils.GetEnvString("GROQ_API_KEY", ""),
+		BaseURL: "http://localhost:11434",
+	}
+}
+
+func setupTest() (*database.DB, llm.LLMModel, error) {
+	dbCfg := getDBConfig()
+	llmCfg := getEmbeddingConfig()
+
+	db, err := database.NewDB(context.Background(), dbCfg)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to init database")
 	}
-	model, err := llm.NewClient(getTestModelConfig())
+	model, err := llm.NewLLM(llmCfg)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to init ollama model")
 	}
@@ -56,11 +59,9 @@ func TestPostgres(query string) {
 	if err != nil {
 		fmt.Println(err)
 	}
-	model, err := llm.NewClient(getTestModelConfig())
-	if err != nil {
-		fmt.Println("failed to init client: %w", err)
-	}
-	embeddings, err := model.GenerateEmbeddings(ctx, []string{query})
+
+	embedder := llm.NewOpenAICompatibleEmbedding(getEmbeddingConfig())
+	embedding, err := embedder.Embed(ctx, query)
 	if err != nil {
 		fmt.Println("failed to embedding query: %w", err)
 	}
@@ -71,7 +72,7 @@ func TestPostgres(query string) {
 			Query:        query,
 			BM25Weight:   0.5,
 			VectorWeight: 0.5,
-			Embedding:    embeddings[0],
+			Embedding:    embedding,
 			Limit:        5,
 		})
 

@@ -15,10 +15,10 @@ type GenerationMetrics struct {
 
 // Judge chịu trách nhiệm gọi LLM để chấm điểm các chỉ số ngữ nghĩa
 type Judge struct {
-	client *llm.Client
+	client *llm.OpenAICompatibleLLM
 }
 
-func NewJudge(client *llm.Client) *Judge {
+func NewJudge(client *llm.OpenAICompatibleLLM) *Judge {
 	return &Judge{client: client}
 }
 

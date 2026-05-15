@@ -54,7 +54,7 @@ import (
 // 	return nil
 // }
 
-func ingestBatchingToVDB(ctx context.Context, model *llm.Client, db *database.DB, filePaths []string) error {
+func ingestBatchingToVDB(ctx context.Context, model *llm.OpenAICompatibleEmbedding, db *database.DB, filePaths []string) error {
 	// 1. Load và Split song song (Tận dụng goroutines đã viết ở spliiter.go)
 	docs, err := loadBatchDocs(ctx, filePaths)
 	if err != nil {
@@ -82,7 +82,7 @@ func ingestBatchingToVDB(ctx context.Context, model *llm.Client, db *database.DB
 			end = len(texts)
 		}
 
-		batchVectors, err := model.GenerateEmbeddings(ctx, texts[i:end])
+		batchVectors, err := model.Embeds(ctx, texts[i:end])
 		if err != nil {
 			return fmt.Errorf("failed to generate embeddings (batch %d-%d): %w", i, end, err)
 		}

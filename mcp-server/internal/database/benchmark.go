@@ -10,6 +10,7 @@ import (
 	"mcp-server/internal/utils"
 	"os"
 	"strings"
+	"time"
 )
 
 type EvalRow struct {
@@ -18,18 +19,11 @@ type EvalRow struct {
 	Context  string `json:"context"`
 }
 
-func getConfig() (llm.Config, DBConfig) {
-	return llm.Config{
-			LLM: llm.ProviderConfig{
-				Provider: llm.ProviderGroq,
-				Model:    "llama-3.3-70b-versatile",
-				APIKey:   utils.GetEnvString("GROQ_API_KEY", ""),
-			},
-			Embed: llm.ProviderConfig{
-				Provider: llm.ProviderOllama,
-				BaseURL:  "http://localhost:11434",
-				Model:    "qwen3-embedding:0.6b",
-			},
+func getConfig() (llm.OpenAICompatibleConfig, DBConfig) {
+	return llm.OpenAICompatibleConfig{
+			Model:   "llama-3.3-70b-versatile",
+			APIKey:  utils.GetEnvString("GROQ_API_KEY", ""),
+			BaseURL: "http://localhost:11434",
 		},
 		DBConfig{
 			Host:     utils.GetEnvString("DB_HOST", "localhost"),
@@ -43,7 +37,7 @@ func getConfig() (llm.Config, DBConfig) {
 		}
 }
 
-func generateEvalRow(ctx context.Context, client *llm.Client, chunk string) (*EvalRow, error) {
+func generateEvalRow(ctx context.Context, client llm.LLMModel, chunk string) (*EvalRow, error) {
 	prompt := fmt.Sprintf(`
 Bạn là một chuyên gia tạo tập dữ liệu đánh giá cho hệ thống RAG của Salon tóc. 
 Dựa trên nội dung (Context) dưới đây, hãy tạo ra MỘT cặp Câu hỏi và Câu trả lời tương ứng.
@@ -73,8 +67,8 @@ Context:
 
 func GenDataset(filePath string) error {
 	ctx := context.Background()
-	clientCfg, dbCfg := getConfig()
-	client, err := llm.NewClient(clientCfg)
+	llmCfg, dbCfg := getConfig()
+	client, err := llm.NewLLM(llmCfg)
 
 	if err != nil {
 		return fmt.Errorf("failed to init client for llm and embedding: %w", err)
@@ -154,6 +148,7 @@ func Evaluation(filePath string, verbose bool) error {
 	// 4. Evaluation
 	fmt.Println("\nBắt đầu đánh giá hiệu năng Retrieval (Hit Rate, MRR, P@1)...")
 	var dataEval []evaluation.DatasetItem
+	var timeSearch map[int]float64
 
 	for i, record := range records {
 		if i == 0 {
@@ -163,12 +158,15 @@ func Evaluation(filePath string, verbose bool) error {
 		expectedContext := record[2]
 
 		// perform search
+		startTime := time.Now()
 		results, err := db.HybridSearch(ctx, HybridSearchParams{
 			Query:        question,
 			Limit:        5,
 			BM25Weight:   0.5,
 			VectorWeight: 0.5,
 		})
+		endTime := time.Now()
+		timeSearch[i] = endTime.Sub(startTime).Seconds()
 		// format to []string
 		var retrievedContext []string
 		for _, res := range results {
@@ -187,9 +185,23 @@ func Evaluation(filePath string, verbose bool) error {
 		})
 	}
 	resultsDetail, resultMetrics := evaluation.EvaluateRetrieval(dataEval)
+	// inject time search to result metrics
+	for i, res := range resultsDetail {
+		res.TimeSearch = timeSearch[i]
+	}
+	resultMetrics.AvgTimeSearch = calculateAverageTime(timeSearch)
+	// save result to csv  and print metrics summary if verbose is true
 	if verbose {
 		evaluation.PrintSummary(resultMetrics)
 		evaluation.SaveDetailedResultsToCSV(resultsDetail, resultPath)
 	}
 	return nil
+}
+
+func calculateAverageTime(timeSearch map[int]float64) float64 {
+	var total float64
+	for _, time := range timeSearch {
+		total += time
+	}
+	return total / float64(len(timeSearch))
 }

@@ -2,22 +2,15 @@ package evaluation
 
 import "log"
 
-// RetrievalResult hold metrics for evaluation
-type RetrievalResult struct {
-	HitRate      float64
-	MRR          float64
-	PrecisionAt1 float64
-}
-
 // EvaluateRetrieval log detail process evaluation and metrics
-func EvaluateRetrieval(items []DatasetItem) ([]DatasetResultEval, RetrievalResult) {
+func EvaluateRetrieval(items []DatasetItem) ([]DatasetResultEval, RetrievalMetrics) {
 	var hits, p1 int
 	var mrrSum float64
 	total := len(items)
 
 	if total == 0 {
 		log.Println("no found items to evaluation!")
-		return []DatasetResultEval{}, RetrievalResult{}
+		return []DatasetResultEval{}, RetrievalMetrics{}
 	}
 
 	datasetResultEvals := []DatasetResultEval{}
@@ -47,7 +40,7 @@ func EvaluateRetrieval(items []DatasetItem) ([]DatasetResultEval, RetrievalResul
 		datasetResultEvals = append(datasetResultEvals, datasetResultEval)
 	}
 
-	resultsMetrics := RetrievalResult{
+	resultsMetrics := RetrievalMetrics{
 		HitRate:      float64(hits) / float64(total) * 100,
 		MRR:          mrrSum / float64(total),
 		PrecisionAt1: float64(p1) / float64(total) * 100,

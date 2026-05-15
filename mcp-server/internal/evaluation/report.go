@@ -37,10 +37,11 @@ func SaveDetailedResultsToCSV(evals []DatasetResultEval, filePath string) error 
 }
 
 // PrintSummary print result on console
-func PrintSummary(metrics RetrievalResult) {
+func PrintSummary(metrics RetrievalMetrics) {
 	fmt.Printf("\n--- KẾT QUẢ ĐÁNH GIÁ TỔNG HỢP ---\n")
 	fmt.Printf("Hit Rate@5:      %.2f%%\n", metrics.HitRate)
 	fmt.Printf("Precision@1:    %.2f%%\n", metrics.PrecisionAt1)
 	fmt.Printf("MRR (Ranking):  %.4f\n", metrics.MRR)
+	fmt.Printf("Avg Time Search: %.4f\n", metrics.AvgTimeSearch)
 	fmt.Println("---------------------------------")
 }

@@ -15,9 +15,10 @@ import (
 )
 
 const (
-	sessionID = "session_001"
-	appName   = "multi_agent"
-	userID    = "user_001"
+	sessionID    = "session_001"
+	appName      = "multi_agent"
+	userID       = "user_001"
+	embeddingDim = 1024
 )
 
 func getConfigPGMem() PostgresMemoryServiceConfig {
@@ -25,9 +26,12 @@ func getConfigPGMem() PostgresMemoryServiceConfig {
 		ConnString: utils.GetEnvString("POSTGRES_URL", "postgres://mcp_user:mcp_password@localhost:5433/salon_chain"),
 		EmbeddingModel: NewOpenAICompatibleEmbedding(
 			OpenAICompatibleEmbeddingConfig{
-				BaseURL:   utils.GetEnvString("BASE_URL_MODEL", "http://localhost:11434/v1"),
-				Model:     utils.GetEnvString("EMBEDDING_MODEL", "qwen3-embedding:0.6b"),
-				Dimension: utils.GetEnvInt("EMBEDDING_DIM", 1024),
+				// BaseURL:   utils.GetEnvString("BASE_URL_OLLAMA", "http://localhost:11434/v1"),
+				// Model:     utils.GetEnvString("EMBEDDING_MODEL", "qwen3-embedding:0.6b"),
+				BaseURL:   utils.GetEnvString("BASE_URL_OPENAI", "https://api.openai.com/v1"),
+				Model:     "text-embedding-3-large",
+				Dimension: utils.GetEnvInt("EMBEDDING_DIM", embeddingDim),
+				APIKey:    utils.GetEnvString("OPENAI_API_KEY", ""),
 			},
 		),
 		topKBM25:     50,
@@ -265,4 +269,6 @@ func TestDeleteMemory(t *testing.T) {
 
 	err = pgSvc.DeleteMemory(ctx, appName, userID, 1)
 	assert.NoError(t, err)
+
+	clearTable(ctx, t)
 }

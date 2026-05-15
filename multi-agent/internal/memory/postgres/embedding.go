@@ -13,10 +13,11 @@ import (
 // OpenAICompatibleEmbedding implements EmbeddingModel using the OpenAI embeddings API format.
 // This is the de facto standard supported by: OpenAI, Ollama (/v1), Azure OpenAI, vLLM, LocalAI, LiteLLM, etc.
 type OpenAICompatibleEmbedding struct {
-	BaseURL string // e.g., "https://api.openai.com/v1", "http://localhost:11434/v1"
-	APIKey  string // optional, not required for local models
-	Model   string // e.g., "text-embedding-3-small", "nomic-embed-text"
-	dim     int    // embedding dimension, auto-detected if 0
+	BaseURL       string // e.g., "https://api.openai.com/v1", "http://localhost:11434/v1"
+	APIKey        string // optional, not required for local models
+	Model         string // e.g., "text-embedding-3-small", "nomic-embed-text"
+	dim           int    // embedding dimension, auto-detected if 0
+	dimensionsSet bool   // whether dim was explicitly set by the user
 
 	// HTTPClient allows customizing the HTTP client used for requests.
 	// If nil, http.DefaultClient is used.
@@ -43,11 +44,12 @@ func NewOpenAICompatibleEmbedding(cfg OpenAICompatibleEmbeddingConfig) *OpenAICo
 		httpClient = http.DefaultClient
 	}
 	return &OpenAICompatibleEmbedding{
-		BaseURL:    strings.TrimSuffix(cfg.BaseURL, "/"),
-		APIKey:     cfg.APIKey,
-		Model:      cfg.Model,
-		dim:        cfg.Dimension,
-		HTTPClient: httpClient,
+		BaseURL:       strings.TrimSuffix(cfg.BaseURL, "/"),
+		APIKey:        cfg.APIKey,
+		Model:         cfg.Model,
+		dim:           cfg.Dimension,
+		dimensionsSet: cfg.Dimension > 0,
+		HTTPClient:    httpClient,
 	}
 }
 
@@ -62,6 +64,9 @@ func (e *OpenAICompatibleEmbedding) Embed(ctx context.Context, text string) ([]f
 	reqBody := map[string]any{
 		"model": e.Model,
 		"input": text,
+	}
+	if e.dimensionsSet && e.dim > 0 {
+		reqBody["dimensions"] = e.dim
 	}
 	jsonBody, err := json.Marshal(reqBody)
 	if err != nil {

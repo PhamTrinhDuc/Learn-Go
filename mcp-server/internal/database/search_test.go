@@ -24,22 +24,10 @@ func getTestDBConfig() DBConfig {
 	}
 }
 
-func getTestModelConfig() llm.Config {
-	provider := llm.Provider(utils.GetEnvString("LLM_PROVIDER", "ollama"))
-	apiKey := utils.GetEnvString("LLM_API_KEY", "")
-	return llm.Config{
-		LLM: llm.ProviderConfig{
-			Provider: provider,
-			BaseURL:  utils.GetEnvString("OLLAMA_URL", "http://localhost:11434"),
-			APIKey:   apiKey,
-			Model:    utils.GetEnvString("LLM_MODEL", "qwen2.5:0.5b"),
-		},
-		Embed: llm.ProviderConfig{
-			Provider: provider,
-			BaseURL:  utils.GetEnvString("OLLAMA_URL", "http://localhost:11434"),
-			APIKey:   apiKey,
-			Model:    utils.GetEnvString("EMBED_MODEL", "qwen3-embedding:0.6b"),
-		},
+func getTestModelConfig() llm.OpenAICompatibleConfig {
+	return llm.OpenAICompatibleConfig{
+		BaseURL: utils.GetEnvString("BASE_URL_OLLAMA", "http://localhost:11434"),
+		Model:   utils.GetEnvString("EMBEDDING_MODEL", "qwen3-embedding:0.6"),
 	}
 }
 
