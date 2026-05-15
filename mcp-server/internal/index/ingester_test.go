@@ -10,23 +10,6 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-var configDB = database.DBConfig{
-	Host:     "localhost",
-	Port:     5433,
-	User:     "mcp_user",
-	Password: "mcp_password",
-	DBName:   "salon_chain",
-}
-
-var llmConfig = llm.OpenAICompatibleConfig{
-	// BaseURL:   utils.GetEnvString("BASE_URL_OLLAMA", "http://localhost:11434/v1"),
-	// Model:     utils.GetEnvString("EMBEDDING_MODEL", "qwen3-embedding:0.6b"),
-	BaseURL:   utils.GetEnvString("BASE_URL_OPENAI", "https://api.openai.com/v1"),
-	Model:     "text-embedding-3-large",
-	Dimension: utils.GetEnvInt("EMBEDDING_DIM", 1024),
-	APIKey:    utils.GetEnvString("OPENAI_API_KEY", "abcd"),
-}
-
 // func TestIngestToVDB(t *testing.T) {
 
 // 	ctx := context.Background()
@@ -49,10 +32,10 @@ func TestIngestBatchingToVDB(t *testing.T) {
 	filePaths, err := utils.GetListFiles(dataRoot)
 	assert.NoError(t, err)
 	// 1. Init database
-	db, err := database.NewDB(ctx, configDB)
+	db, err := database.NewDB(ctx, database.NewDBConfig())
 	assert.NoError(t, err)
 	// 2. Init client Ollama
-	model := llm.NewOpenAICompatibleEmbedding(llmConfig)
+	model := llm.NewOpenAICompatibleEmbedding(llm.NewOpenAIEmbeddingConfig())
 	assert.NoError(t, err)
 
 	err = ingestBatchingToVDB(ctx, model, db, filePaths)

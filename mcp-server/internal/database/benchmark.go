@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"mcp-server/internal/evaluation"
 	"mcp-server/internal/llm"
-	"mcp-server/internal/utils"
 	"os"
 	"strings"
 	"time"
@@ -19,24 +18,7 @@ type EvalRow struct {
 	Context  string `json:"context"`
 }
 
-func getConfig() (llm.OpenAICompatibleConfig, DBConfig) {
-	return llm.OpenAICompatibleConfig{
-			Model:   "llama-3.3-70b-versatile",
-			APIKey:  utils.GetEnvString("GROQ_API_KEY", ""),
-			BaseURL: "http://localhost:11434",
-		},
-		DBConfig{
-			Host:     utils.GetEnvString("DB_HOST", "localhost"),
-			Port:     utils.GetEnvInt("DB_PORT", 5433),
-			User:     utils.GetEnvString("DB_USER", "mcp_user"),
-			Password: utils.GetEnvString("DB_PASSWORD", "mcp_password"),
-			DBName:   utils.GetEnvString("DB_NAME", "salon_chain"),
-			SSLMode:  utils.GetEnvString("DB_SSLMODE", "disable"),
-			MaxConns: int32(utils.GetEnvInt("MAX_CONNS", 10)),
-			MinConns: int32(utils.GetEnvInt("MAX_CONNS", 2)),
-		}
-}
-
+// generateEvalRow create pair question and answer from context using llm
 func generateEvalRow(ctx context.Context, client llm.LLMModel, chunk string) (*EvalRow, error) {
 	prompt := fmt.Sprintf(`
 Bạn là một chuyên gia tạo tập dữ liệu đánh giá cho hệ thống RAG của Salon tóc. 
@@ -65,21 +47,21 @@ Context:
 	return &row, nil
 }
 
+// GenDataset create dataset for benchmark test [question, answer, context]
 func GenDataset(filePath string) error {
 	ctx := context.Background()
-	llmCfg, dbCfg := getConfig()
-	client, err := llm.NewLLM(llmCfg)
+	client, err := llm.NewLLM(llm.NewOpenAIEmbeddingConfig())
 
 	if err != nil {
 		return fmt.Errorf("failed to init client for llm and embedding: %w", err)
 	}
 
-	db, err := NewDB(ctx, dbCfg)
+	db, err := NewDB(ctx, NewDBConfig())
 	if err != nil {
 		return fmt.Errorf("failed init database: %w", err)
 	}
 
-	documents, err := db.ListDocuments(ctx, 5, 0) // Giới hạn 10 bản ghi để test
+	documents, err := db.ListDocuments(ctx, 5, 0)
 	if err != nil {
 		return err
 	}
@@ -119,11 +101,11 @@ func GenDataset(filePath string) error {
 	return nil
 }
 
+// Evaluation test retrieval performance [Hit Rate, MRR, P@1, NDCG, Time Search]
 func Evaluation(filePath string, verbose bool) error {
 	ctx := context.Background()
 	// 1. Khởi tạo DB
-	_, dbCfg := getConfig()
-	db, err := NewDB(ctx, dbCfg)
+	db, err := NewDB(ctx, NewDBConfig())
 	if err != nil {
 		return err
 	}

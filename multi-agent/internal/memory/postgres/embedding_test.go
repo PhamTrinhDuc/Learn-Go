@@ -14,9 +14,9 @@ func TestEmbed(t *testing.T) {
 		OpenAICompatibleEmbeddingConfig{
 			// BaseURL:   utils.GetEnvString("BASE_URL_OLLAMA", "http://localhost:11434/v1"),
 			// Model:     utils.GetEnvString("EMBEDDING_MODEL", "qwen3-embedding:0.6b"),
-			BaseURL:   utils.GetEnvString("BASE_URL_OPENAI", "https://api.openai.com/v1"),
-			Model:     "text-embedding-3-large",
-			Dimension: utils.GetEnvInt("EMBEDDING_DIM", embeddingDim),
+			BaseURL:   utils.GetEnvString("OPENAI_BASE_URL", "https://api.openai.com/v1"),
+			Model:     utils.GetEnvString("OPENAI_EMBEDDING_MODEL", "text-embedding-3-large"),
+			Dimension: utils.GetEnvInt("OPENAI_EMBEDDING_DIM", embeddingDim),
 			APIKey:    utils.GetEnvString("OPENAI_API_KEY", ""),
 		},
 	)

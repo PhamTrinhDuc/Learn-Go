@@ -3,6 +3,7 @@ package database
 import (
 	"context"
 	"fmt"
+	"mcp-server/internal/utils"
 	"strings"
 	"time"
 
@@ -369,4 +370,17 @@ func (db *DB) DeleteDocumentByID(ctx context.Context, docID uuid.UUID) error {
 		return fmt.Errorf("document not found")
 	}
 	return tx.Commit(ctx)
+}
+
+func NewDBConfig() DBConfig {
+	return DBConfig{
+		Host:     utils.GetEnvString("DB_HOST", "localhost"),
+		Port:     utils.GetEnvInt("DB_PORT", 5433),
+		User:     utils.GetEnvString("DB_USER", "mcp_user"),
+		Password: utils.GetEnvString("DB_PASSWORD", "mcp_password"),
+		DBName:   utils.GetEnvString("DB_NAME", "salon_chain"),
+		SSLMode:  utils.GetEnvString("DB_SSLMODE", "disable"),
+		MaxConns: int32(utils.GetEnvInt("DB_MAX_CONNS", 10)),
+		MinConns: int32(utils.GetEnvInt("DB_MIN_CONNS", 2)),
+	}
 }

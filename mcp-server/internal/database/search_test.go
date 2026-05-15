@@ -2,8 +2,6 @@ package database
 
 import (
 	"context"
-	llm "mcp-server/internal/llm"
-	utils "mcp-server/internal/utils"
 	"sync"
 	"testing"
 
@@ -11,29 +9,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func getTestDBConfig() DBConfig {
-	return DBConfig{
-		Host:     utils.GetEnvString("DB_HOST", "localhost"),
-		Port:     utils.GetEnvInt("DB_PORT", 5433),
-		User:     utils.GetEnvString("DB_USER", "app_user"), // Use app_user for RLS enforcement
-		Password: utils.GetEnvString("DB_PASSWORD", "mcp_password"),
-		DBName:   utils.GetEnvString("DB_NAME", "salon_chain"),
-		SSLMode:  utils.GetEnvString("DB_SSLMODE", "disable"),
-		MaxConns: int32(utils.GetEnvInt("MAX_CONNS", 10)),
-		MinConns: int32(utils.GetEnvInt("MAX_CONNS", 2)),
-	}
-}
-
-func getTestModelConfig() llm.OpenAICompatibleConfig {
-	return llm.OpenAICompatibleConfig{
-		BaseURL: utils.GetEnvString("BASE_URL_OLLAMA", "http://localhost:11434"),
-		Model:   utils.GetEnvString("EMBEDDING_MODEL", "qwen3-embedding:0.6"),
-	}
-}
-
 func setupTestDB(t *testing.T) *DB {
-	cfg := getTestDBConfig()
-	db, err := NewDB(context.Background(), cfg)
+	db, err := NewDB(context.Background(), NewDBConfig())
 	require.NoError(t, err, "Failed to connect to test database")
 
 	// model, err := ollama.NewClient(getTestModelConfig())
