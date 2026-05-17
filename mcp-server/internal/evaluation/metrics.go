@@ -1,9 +1,14 @@
 package evaluation
 
-import "log"
+import (
+	"context"
+	"log"
+	"mcp-server/internal/llm"
+)
 
 // EvaluateRetrieval log detail process evaluation and metrics
-func EvaluateRetrieval(items []DatasetItem) ([]DatasetResultEval, RetrievalMetrics) {
+func EvaluateRetrieval(items []DatasetItem, client llm.LLMModel) ([]DatasetResultEval, RetrievalMetrics) {
+	// Init metrics variables
 	var hits, p1 int
 	var mrrSum float64
 	total := len(items)
@@ -13,9 +18,12 @@ func EvaluateRetrieval(items []DatasetItem) ([]DatasetResultEval, RetrievalMetri
 		return []DatasetResultEval{}, RetrievalMetrics{}
 	}
 
+	// 2. Format datasets and int Judge
 	datasetResultEvals := []DatasetResultEval{}
+	judge := NewJudge(client)
 
 	for _, item := range items {
+		// Caculate rank, hit for metrics
 		rank := 0
 		for i, ctx := range item.RetrievedContexts {
 			if isMatch(ctx, item.GroundTruthContext) {
@@ -31,20 +39,33 @@ func EvaluateRetrieval(items []DatasetItem) ([]DatasetResultEval, RetrievalMetri
 				p1++
 			}
 		}
+		var scoreFaithFulness, scoreAnswerRelevancy float64
+		var err error
+		if judge != nil {
+			// Score faithfulness
+			scoreFaithFulness, err = judge.ScoreFaithfulness(context.Background(), item.GeneratedAnswer, item.RetrievedContexts)
+			if err != nil {
+				log.Printf("Failed to score faithfulness for item: %v\n", err)
+			}
+
+			// Score answer relevancy
+			scoreAnswerRelevancy, err = judge.ScoreAnswerRelevancy(context.Background(), item.Question, item.GeneratedAnswer)
+			if err != nil {
+				log.Printf("Failed to score answer relevancy for item: %v\n", err)
+			}
+		}
 
 		datasetResultEval := DatasetResultEval{
-			Item:   item,
-			Hit:    rank,
-			Status: GetStatus(rank),
+			Item:                 item,
+			Hit:                  rank,
+			Status:               GetStatus(rank),
+			ScoreAnswerRelevancy: scoreAnswerRelevancy,
+			ScoreFaithfulness:    scoreFaithFulness,
 		}
 		datasetResultEvals = append(datasetResultEvals, datasetResultEval)
 	}
 
-	resultsMetrics := RetrievalMetrics{
-		HitRate:      float64(hits) / float64(total) * 100,
-		MRR:          mrrSum / float64(total),
-		PrecisionAt1: float64(p1) / float64(total) * 100,
-	}
+	resultsMetrics := calculateAverageMetrics(datasetResultEvals)
 
 	return datasetResultEvals, resultsMetrics
 }
@@ -64,4 +85,37 @@ func GetStatus(rank int) string {
 		return "HIT"
 	}
 	return "MISS"
+}
+
+func calculateAverageMetrics(results []DatasetResultEval) RetrievalMetrics {
+	var totalHitRate, totalMRR, totalPrecisionAt1, totalScoreAnswerRelevancy, totalScoreFaithfulness float64
+	total := len(results)
+
+	if total == 0 {
+		return RetrievalMetrics{}
+	}
+
+	// Tính tổng từng chỉ số từ tất cả các item
+	for _, result := range results {
+		totalHitRate += float64(result.Hit)
+		totalMRR += float64(result.Hit)
+		totalPrecisionAt1 += float64(result.Hit)
+		totalScoreAnswerRelevancy += result.ScoreAnswerRelevancy
+		totalScoreFaithfulness += result.ScoreFaithfulness
+	}
+
+	// Tính trung bình cho từng chỉ số
+	avgHitRate := totalHitRate / float64(total)
+	avgMRR := totalMRR / float64(total)
+	avgPrecisionAt1 := totalPrecisionAt1 / float64(total)
+	avgScoreAnswerRelevancy := totalScoreAnswerRelevancy / float64(total)
+	avgScoreFaithfulness := totalScoreFaithfulness / float64(total)
+
+	return RetrievalMetrics{
+		HitRate:                 avgHitRate,
+		MRR:                     avgMRR,
+		PrecisionAt1:            avgPrecisionAt1,
+		AvgScoreAnswerRelevancy: avgScoreAnswerRelevancy,
+		AvgScoreFaithfulness:    avgScoreFaithfulness,
+	}
 }

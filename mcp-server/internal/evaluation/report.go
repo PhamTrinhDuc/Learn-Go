@@ -4,6 +4,7 @@ import (
 	"encoding/csv"
 	"fmt"
 	"os"
+	"strings"
 )
 
 // SaveDetailedResultsToCSV store result detail to file
@@ -18,13 +19,19 @@ func SaveDetailedResultsToCSV(evals []DatasetResultEval, filePath string) error 
 	defer writer.Flush()
 
 	// Header
-	writer.Write([]string{"Question", "Expected Context", "Rank", "Status"})
+	writer.Write([]string{"Question", "Expected Context", "Generated Answer", "Ground Truth Answer", "Faithfulness", "AnswerRelevancy", "Rank", "Time Search", "Status"})
 
 	for _, e := range evals {
 		err := writer.Write([]string{
 			e.Item.Question,
 			e.Item.GroundTruthContext,
+			strings.Join(e.Item.RetrievedContexts, "\n"),
+			e.Item.GeneratedAnswer,
+			e.Item.GroundTruthAnswer,
+			fmt.Sprintf("%.2f", e.ScoreFaithfulness),
+			fmt.Sprintf("%.2f", e.ScoreAnswerRelevancy),
 			fmt.Sprintf("%d", e.Hit),
+			fmt.Sprintf("%.4f", e.TimeSearch),
 			e.Status,
 		})
 		if err != nil {

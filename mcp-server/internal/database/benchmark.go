@@ -102,7 +102,7 @@ func GenDataset(filePath string) error {
 }
 
 // Evaluation test retrieval performance [Hit Rate, MRR, P@1, NDCG, Time Search]
-func Evaluation(filePath string, verbose bool) error {
+func Evaluation(filePath string, client llm.LLMModel, verbose bool) error {
 	ctx := context.Background()
 	// 1. Khởi tạo DB
 	db, err := NewDB(ctx, NewDBConfig())
@@ -124,13 +124,13 @@ func Evaluation(filePath string, verbose bool) error {
 		return err
 	}
 
-	// 3. Mở file để lưu kết quả chi tiết
+	// 3.Create file path to save result detail
 	resultPath := strings.Replace(filePath, ".csv", "_results.csv", 1)
 
 	// 4. Evaluation
 	fmt.Println("\nBắt đầu đánh giá hiệu năng Retrieval (Hit Rate, MRR, P@1)...")
 	var dataEval []evaluation.DatasetItem
-	var timeSearch map[int]float64
+	var timeSearch []float64
 
 	for i, record := range records {
 		if i == 0 {
@@ -148,15 +148,36 @@ func Evaluation(filePath string, verbose bool) error {
 			VectorWeight: 0.5,
 		})
 		endTime := time.Now()
-		timeSearch[i] = endTime.Sub(startTime).Seconds()
-		// format to []string
+		timeSearch = append(timeSearch, endTime.Sub(startTime).Seconds())
+		// format context from result search to []string
 		var retrievedContext []string
 		for _, res := range results {
 			retrievedContext = append(retrievedContext, res.Document.Content)
 		}
 
 		if err != nil {
-			fmt.Printf("Lỗi search câu %d: %v\n", i, err)
+			fmt.Printf("Failed to search for query %d: %v\n", i, err)
+			continue
+		}
+
+		// generate answer using client llm
+		prompt := fmt.Sprintf(`
+		Bạn là một trợ lý AI chuyên nghiệp trong ngành tóc.
+		Nhiệm vụ của bạn là trả lời câu hỏi của khách hàng dựa trên ngữ cảnh được cung cấp.
+
+		[CONTEXT]:
+		%s
+
+		[QUESTION]:
+		%s
+
+		Hãy trả lời một cách tự nhiên, ngắn gọn và chính xác.
+		Đừng trả lời nếu thông tin không có trong Context.
+		`, retrievedContext, question)
+
+		generatedAnswer, err := client.Chat(ctx, prompt)
+		if err != nil {
+			fmt.Printf("Failed to generate answer for query %d: %v\n", i, err)
 			continue
 		}
 
@@ -164,12 +185,14 @@ func Evaluation(filePath string, verbose bool) error {
 			Question:           question,
 			GroundTruthContext: expectedContext,
 			RetrievedContexts:  retrievedContext,
+			GeneratedAnswer:    generatedAnswer,
+			GroundTruthAnswer:  record[1],
 		})
 	}
-	resultsDetail, resultMetrics := evaluation.EvaluateRetrieval(dataEval)
+	resultsDetail, resultMetrics := evaluation.EvaluateRetrieval(dataEval, client)
 	// inject time search to result metrics
-	for i, res := range resultsDetail {
-		res.TimeSearch = timeSearch[i]
+	for i := range resultsDetail {
+		resultsDetail[i].TimeSearch = timeSearch[i]
 	}
 	resultMetrics.AvgTimeSearch = calculateAverageTime(timeSearch)
 	// save result to csv  and print metrics summary if verbose is true
@@ -180,7 +203,7 @@ func Evaluation(filePath string, verbose bool) error {
 	return nil
 }
 
-func calculateAverageTime(timeSearch map[int]float64) float64 {
+func calculateAverageTime(timeSearch []float64) float64 {
 	var total float64
 	for _, time := range timeSearch {
 		total += time

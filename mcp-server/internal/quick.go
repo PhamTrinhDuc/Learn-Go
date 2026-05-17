@@ -33,7 +33,7 @@ func getLLmConfig() llm.OpenAICompatibleConfig {
 	return llm.OpenAICompatibleConfig{
 		Model:   "llama-3.3-70b-versatile",
 		APIKey:  utils.GetEnvString("GROQ_API_KEY", ""),
-		BaseURL: "http://localhost:11434",
+		BaseURL: "https://api.groq.com/openai/v1",
 	}
 }
 
@@ -93,13 +93,20 @@ func TestPostgres(query string) {
 }
 
 func TestBenchmark() {
+	llmCfg := getLLmConfig()
+
+	llmClient, err := llm.NewLLM(llmCfg)
+	if err != nil {
+		fmt.Printf("failed to init llm client: %v\n", err)
+		return
+	}
 	filePath := "../data/evals/eval_dataset.csv"
 	// err := database.GenDataset(filePath)
 	// if err != nil {
 	// 	fmt.Printf("failed to gen dataset: %s", err)
 	// }
 
-	err := database.Evaluation(filePath, true)
+	err = database.Evaluation(filePath, llmClient, true)
 	if err != nil {
 		fmt.Println("failed to evaluaton dataset: %w", err)
 	}
