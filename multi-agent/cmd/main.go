@@ -59,8 +59,8 @@ func main() {
 	}
 
 	// 5. Chạy Server
-	log.Println("Agent API Server is running on :8080")
-	if err := r.Run(":8085"); err != nil {
+	log.Println("Agent API Server is running on :8089")
+	if err := r.Run(":8089"); err != nil {
 		log.Fatalf("Failed to run server: %v", err)
 	}
 }
