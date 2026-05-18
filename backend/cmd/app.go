@@ -128,11 +128,15 @@ func main() {
 	container := bootstrap.NewContainer(db.GetPool(), telemetry)
 
 	v1 := r.Group("/api/v1")
-	route.SetupBranchRoutes(v1, container.BranchCtl, authMiddleware)
-	route.SetupUserRoutes(v1, container.UserCtl, authMiddleware)
-	route.SetupStylistRoutes(v1, container.StylistCtl, authMiddleware)
-	route.SetupStylistScheduleRoutes(v1, container.StylistScheduleCtl, authMiddleware)
+	route.SetupBranchRoutes(v1, container.BranchCtl, authMiddleware)                   // Branch
+	route.SetupUserRoutes(v1, container.UserCtl, authMiddleware)                       // User
+	route.SetupStylistRoutes(v1, container.StylistCtl, authMiddleware)                 // Stylist
+	route.SetupStylistScheduleRoutes(v1, container.StylistScheduleCtl, authMiddleware) // Stylist schedule
+	route.SetupServiceRoutes(v1, container.ServicesCtl, authMiddleware)                // Services
+	route.SetupProductRoutes(v1, container.ProductCtl, authMiddleware)                 // Product
+	route.SetupOrderRoutes(v1, container.OrderCtl, authMiddleware)                     // Order
+	route.SetupOrderItemRoutes(v1, container.OrderItemCtl, authMiddleware)             // OrderItem
 
 	// 6. Chạy Server
-	r.Run(":8080") // Server sẽ chạy tại http://localhost:8080
+	r.Run(string(utils.GetEnvInt("BACKEND_PORT", 8080)))
 }

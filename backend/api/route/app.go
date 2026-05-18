@@ -112,3 +112,29 @@ func SetupStylistScheduleRoutes(router *gin.RouterGroup, ssc *controller.Stylist
 		schedule.DELETE("/:id", authMiddleware.Handler(), authMiddleware.RequireRole(string(domain.RoleAdmin), string(domain.RoleManager)), ssc.Delete)
 	}
 }
+
+// SetupOrderScheduleRoutes set up all orders routes
+func SetupOrderRoutes(router *gin.RouterGroup, o *controller.OrderController, authMiddleware *middleware.AuthMiddleware) {
+	schedule := router.Group("/orders")
+	schedule.Use(authMiddleware.Handler())
+	{
+		schedule.POST("", authMiddleware.RequireRole(string(domain.RoleCustomer), string(domain.RoleAdmin)), o.Create)               // create order
+		schedule.GET(":/id", authMiddleware.RequireRole(string(domain.RoleCustomer), string(domain.RoleAdmin)), o.GetByID)           // get order by id
+		schedule.PUT("/:id", authMiddleware.RequireRole(string(domain.RoleCustomer), string(domain.RoleAdmin)), o.Update)            // update oder by id
+		schedule.GET("/user/:id", authMiddleware.RequireRole(string(domain.RoleCustomer), string(domain.RoleAdmin)), o.ListByUserID) // get order by user_id
+		schedule.GET("/branch/:branch_id", authMiddleware.RequireRole(string(domain.RoleCustomer), string(domain.RoleAdmin)))        // get orders by branch_id
+		schedule.GET("", authMiddleware.RequireRole(string(domain.RoleAdmin), string(domain.RoleManager)))                           // get all orders
+	}
+}
+
+// SetupOrderScheduleRoutes set up all orders routes
+func SetupOrderItemRoutes(router *gin.RouterGroup, oi *controller.OrderItemsController, authMiddleware *middleware.AuthMiddleware) {
+	schedule := router.Group("/orders_item")
+	schedule.Use(authMiddleware.Handler())
+	{
+		schedule.POST("", authMiddleware.RequireRole(string(domain.RoleCustomer), string(domain.RoleAdmin)), oi.Create)                 // create order_item
+		schedule.GET(":/id", authMiddleware.RequireRole(string(domain.RoleCustomer), string(domain.RoleAdmin)), oi.GetByID)             // get order_item by id
+		schedule.PUT("/:id", authMiddleware.RequireRole(string(domain.RoleCustomer), string(domain.RoleAdmin)), oi.Update)              // update oder_item by id
+		schedule.GET("/order/:id", authMiddleware.RequireRole(string(domain.RoleCustomer), string(domain.RoleAdmin)), oi.ListByOrderID) // get order item by order_id
+	}
+}

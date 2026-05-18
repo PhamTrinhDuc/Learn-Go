@@ -1,9 +1,0 @@
-packages:
-  backend/domain:
-    interfaces:
-      UserRepository:
-        outpkg: mocks
-        output: internal/mocks
-      UserUsecase:
-        outpkg: mocks
-        output: internal/mocks

@@ -1,5 +1,7 @@
 package domain
 
+import "context"
+
 type OrderItems struct {
 	ID        string  `json:"id" db:"id"`
 	OrderID   string  `json:"order_id" db:"order_id"`
@@ -9,9 +11,17 @@ type OrderItems struct {
 }
 
 type OrderItemsRepo interface {
-	GetByID(id string) (*OrderItems, error)
-	ListByOrderID(orderId string) ([]*OrderItems, error)
-	Create(orderItem *OrderItems) error
-	Update(orderItem *OrderItems) error
-	Delete(id string) error
+	GetByID(ctx context.Context, id string) (*OrderItems, error)
+	ListByOrderID(ctx context.Context, orderId string) ([]*OrderItems, error)
+	Create(ctx context.Context, orderItem *OrderItems) error
+	Update(ctx context.Context, orderItem *OrderItems) error
+	Delete(ctx context.Context, id string) error
+}
+
+type OrderItemsUsecase interface {
+	GetByID(ctx context.Context, id string) (*OrderItems, error)
+	ListByOrderID(ctx context.Context, orderId string) ([]*OrderItems, error)
+	Create(ctx context.Context, orderItem *OrderItems) error
+	Update(ctx context.Context, id string, orderItem *OrderItems) error
+	Delete(ctx context.Context, id string) error
 }

@@ -1,5 +1,7 @@
 package domain
 
+import "context"
+
 type PaymentMethod string
 
 const (
@@ -20,10 +22,21 @@ type Orders struct {
 }
 
 type OrdersRepo interface {
-	GetByID(id string) (*Orders, error)
-	Create(order *Orders) error
-	Update(order *Orders) error
-	Delete(id string) error
-	ListByUserID(userId string) ([]*Orders, error)
-	ListByBranchID(branchId string) ([]*Orders, error)
+	Get(ctx context.Context) ([]*Orders, error)
+	GetByID(ctx context.Context, id string) (*Orders, error)
+	Create(ctx context.Context, order *Orders) error
+	Update(ctx context.Context, order *Orders) error
+	Delete(ctx context.Context, id string) error
+	ListByUserID(ctx context.Context, userId string) ([]*Orders, error)
+	ListByBranchID(ctx context.Context, branchId string) ([]*Orders, error)
+}
+
+type OrdersUsecase interface {
+	Get(ctx context.Context) ([]*Orders, error)
+	GetByID(ctx context.Context, id string) (*Orders, error)
+	Create(ctx context.Context, order *Orders) error
+	Update(ctx context.Context, id string, order *Orders) error
+	Delete(ctx context.Context, id string) error
+	ListByUserID(ctx context.Context, userId string) ([]*Orders, error)
+	ListByBranchID(ctx context.Context, branchId string) ([]*Orders, error)
 }
