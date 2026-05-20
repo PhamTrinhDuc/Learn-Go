@@ -8,15 +8,15 @@ import (
 	"net/http"
 	"time"
 
-	"multi-agent/internal/agents"
-	config "multi-agent/internal/config"
-	mymcp "multi-agent/internal/mcp"
-	mySvc "multi-agent/internal/memory/postgres"
-	mySess "multi-agent/internal/memory/redis"
+	"multi-agent/agents"
+	config "multi-agent/config"
+	mymcp "multi-agent/mcp"
+	mySvc "multi-agent/memory/postgres"
+	mySess "multi-agent/memory/redis"
 
-	"multi-agent/internal/observability"
-	"multi-agent/internal/provider/gemini"
-	"multi-agent/internal/utils"
+	"multi-agent/observability"
+	"multi-agent/provider/gemini"
+	"multi-agent/utils"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
@@ -67,6 +67,7 @@ type AgentServer struct {
 }
 
 // headerTransport là một RoundTripper tùy chỉnh để chèn thêm header vào mọi request
+// Agent (Start Span) -> RoundTrip (Inject) -> [Network] -> MCP Server (Extract) -> Tool Handler (Inject) -> [Network] -> Backend (Extract)
 type headerTransport struct {
 	base   http.RoundTripper
 	header string
@@ -147,7 +148,6 @@ func NewAgentServer(ctx context.Context, cfgPath string) (*AgentServer, error) {
 	// 3. Initialize Agents in Parallel
 	registry := agents.NewRegistry()
 	g, groupCtx := errgroup.WithContext(ctx)
-
 	for agentName, agentCfg := range appCfg.Agents {
 		if agentName == "orschestrator_agent" {
 			continue
@@ -205,7 +205,8 @@ func NewAgentServer(ctx context.Context, cfgPath string) (*AgentServer, error) {
 		log.Printf("Failed to init session service for agent: %s", err.Error())
 		return nil, fmt.Errorf("Failed to init session service for agent: %s", err.Error())
 	}
-	runnr, err := runner.New(runner.Config{
+
+	runr, err := runner.New(runner.Config{
 		AppName:        appName,
 		Agent:          targetAgent,
 		SessionService: sessionService,
@@ -233,7 +234,7 @@ func NewAgentServer(ctx context.Context, cfgPath string) (*AgentServer, error) {
 	}()
 	log.Println("OpenTelemetry initialized successfully")
 
-	return &AgentServer{Runner: runnr, SessionService: sessionService, Config: appCfg, Telemetry: telemetry}, nil
+	return &AgentServer{Runner: runr, SessionService: sessionService, Config: appCfg, Telemetry: telemetry}, nil
 }
 
 func (s *AgentServer) HandlerChat(c *gin.Context) {
@@ -268,6 +269,7 @@ func (s *AgentServer) HandlerChat(c *gin.Context) {
 	var confirmationCallID string
 
 	finalResponse := ""
+
 	for event, err := range s.Runner.Run(ctxOtel, userID, r.SessionID, userMsg, agent.RunConfig{}) {
 		if err != nil {
 			log.Printf("Run error: %v", err)

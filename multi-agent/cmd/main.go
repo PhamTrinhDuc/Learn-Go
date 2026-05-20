@@ -3,9 +3,9 @@ package main
 import (
 	"context"
 	"log"
-	"multi-agent/internal/observability"
-	"multi-agent/internal/server"
-	"multi-agent/internal/utils"
+	"multi-agent/observability"
+	"multi-agent/server"
+	"multi-agent/utils"
 
 	"github.com/gin-gonic/gin"
 )

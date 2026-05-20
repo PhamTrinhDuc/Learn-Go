@@ -6,7 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"multi-agent/internal/utils"
+	"multi-agent/utils"
 	"strings"
 	"sync"
 	"time"

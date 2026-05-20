@@ -8,8 +8,8 @@ import (
 	"strings"
 	"time"
 
-	"multi-agent/internal/memory/types"
-	"multi-agent/internal/utils"
+	"multi-agent/memory/types"
+	"multi-agent/utils"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
